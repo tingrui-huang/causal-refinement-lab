@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from causallearn.search.ConstraintBased.FCI import fci
 from causallearn.utils.cit import chisq, fisherz
+from report_generator import save_text_report, save_edge_list
 
 
 class FCIBaseline:
@@ -198,6 +199,10 @@ if __name__ == "__main__":
     baseline.convert_to_networkx()
     
     baseline.print_edges()
+    
+    # Generate reports
+    save_text_report(baseline.graph, model_name="FCI", output_dir=".")
+    save_edge_list(baseline.graph, model_name="FCI", output_dir=".")
     
     baseline.visualize(title="FCI Algorithm - Partial Ancestral Graph (PAG)")
 

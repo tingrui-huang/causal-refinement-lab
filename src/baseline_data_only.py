@@ -2,6 +2,7 @@ import pandas as pd
 import networkx as nx
 import matplotlib.pyplot as plt
 import numpy as np
+from report_generator import save_text_report, save_edge_list
 
 
 class BaselineGraph:
@@ -71,5 +72,10 @@ if __name__ == "__main__":
     baseline = BaselineGraph("../lucas0_train.csv")
 
     baseline.build_simple_dag(threshold=0.3)
+    
+    # Generate reports
+    save_text_report(baseline.graph, model_name="Correlation-Only", output_dir=".")
+    save_edge_list(baseline.graph, model_name="Correlation-Only", output_dir=".")
+    
     baseline.visualize(title="Baseline DAG (Data Only, Correlation > 0.3)")
 

@@ -6,6 +6,9 @@ import openai
 import sys
 import json
 from datetime import datetime
+from sklearn.metrics import mutual_info_score
+from scipy.stats import chi2_contingency
+from report_generator import save_text_report, save_edge_list
 
 
 class CausalDiscoveryAgent:
@@ -34,28 +37,35 @@ class CausalDiscoveryAgent:
             "Anxiety": "Mental health status.",
             "Peer_Pressure": "Social influence to smoke.",
         }
+        
+        # Statistics for validation
+        self.validation_passed = 0
+        self.validation_failed = 0
 
-    def scanner(self, threshold=0.1):
+    def scanner(self, threshold=0.05):
         """
-        Should be Residual Association, but here use correlation
+        [Scanner Module v2.0]
+        Use Mutual Information (MI) instead of Pearson Correlation.
+        MI is better for discrete/binary data (like LUCAS dataset).
+        MI captures both linear and nonlinear dependencies.
         """
-        # Full correlation matrix
-        corr_matrix = self.df.corr().abs()
-
         candidates = []
         for i, node_a in enumerate(self.nodes):
             for j, node_b in enumerate(self.nodes):
                 if i >= j: continue
 
-                # if we have (A->B or B->A)，ski[
+                # Skip if edge already exists
                 if self.graph.has_edge(node_a, node_b) or self.graph.has_edge(node_b, node_a):
                     continue
 
-                score = corr_matrix.loc[node_a, node_b]
-                if score > threshold:
-                    candidates.append((node_a, node_b, score))
+                # Calculate Mutual Information
+                # MI >= 0, higher means stronger dependency
+                mi_score = mutual_info_score(self.df[node_a], self.df[node_b])
+                
+                if mi_score > threshold:
+                    candidates.append((node_a, node_b, mi_score))
 
-        # RankedExpand [cite: 323]
+        # RankedExpand: prioritize highest MI scores
         candidates.sort(key=lambda x: x[2], reverse=True)
         return candidates
 
@@ -122,6 +132,27 @@ Reasoning:"""
             print(f"Error calling API: {e}")
             return "Reasoning: Error occurred. Direction: None"
 
+    def validate_edge_with_data(self, node_a, node_b, significance_level=0.05):
+        """
+        [Data-Driven Validation]
+        Verify if LLM's suggestion is supported by data using Chi-Square test.
+        
+        Returns:
+        --------
+        tuple: (is_valid, p_value)
+            is_valid: True if data supports the edge (p < significance_level)
+            p_value: statistical significance
+        """
+        # Create contingency table
+        contingency_table = pd.crosstab(self.df[node_a], self.df[node_b])
+        
+        # Chi-square test for independence
+        chi2, p_value, dof, expected = chi2_contingency(contingency_table)
+        
+        is_valid = p_value < significance_level
+        
+        return is_valid, p_value
+    
     def parse_response(self, response_text, node_a, node_b):
         """
         [Translator B: Text -> Graph]
@@ -174,8 +205,18 @@ Reasoning:"""
             # 4. Refine Graph
             edge = self.parse_response(response, node_a, node_b)
             if edge:
-                print(f"Action: Adding edge {edge[0]} -> {edge[1]}")
-                self.graph.add_edge(edge[0], edge[1])
+                # 5. Data-Driven Validation
+                is_valid, p_value = self.validate_edge_with_data(edge[0], edge[1])
+                
+                if is_valid:
+                    print(f"[PASS] Data Validated: {edge[0]}->{edge[1]} (p={p_value:.4f})")
+                    self.graph.add_edge(edge[0], edge[1])
+                    self.validation_passed += 1
+                else:
+                    print(f"[FAIL] Data Conflict: LLM said yes, but data says independent (p={p_value:.4f})")
+                    print(f"       -> Edge {edge[0]}->{edge[1]} REJECTED by validation")
+                    self.graph.add_edge(edge[0], edge[1], type='rejected')
+                    self.validation_failed += 1
             else:
                 print("Action: No edge added (Expert rejected or unsure).")
                 self.graph.add_edge(node_a, node_b, type='rejected')
@@ -185,6 +226,17 @@ Reasoning:"""
         
         # Save CoT log at the end
         self.save_cot_log()
+        
+        # Print validation statistics
+        print("\n" + "="*50)
+        print("VALIDATION STATISTICS")
+        print("="*50)
+        print(f"Edges passed validation:  {self.validation_passed}")
+        print(f"Edges failed validation:  {self.validation_failed}")
+        if (self.validation_passed + self.validation_failed) > 0:
+            pass_rate = (self.validation_passed / (self.validation_passed + self.validation_failed)) * 100
+            print(f"Validation pass rate:     {pass_rate:.1f}%")
+        print("="*50)
 
     def save_cot_log(self):
         """
@@ -227,5 +279,10 @@ if __name__ == "__main__":
     
     print(f"\nStarting causal discovery loop with max {max_steps} steps...")
     agent.run_loop(max_steps=max_steps)
+    
+    # Generate reports
+    save_text_report(agent.graph, model_name="GPT-3.5-CoT", cot_log=agent.cot_log, output_dir=".")
+    save_edge_list(agent.graph, model_name="GPT-3.5-CoT", output_dir=".")
+    
     agent.visualize()
 

@@ -3,6 +3,7 @@ import networkx as nx
 import matplotlib.pyplot as plt
 import numpy as np
 from causallearn.search.ScoreBased.GES import ges
+from report_generator import save_text_report, save_edge_list
 
 
 class GESBaseline:
@@ -114,6 +115,10 @@ if __name__ == "__main__":
     baseline.convert_to_networkx()
     
     baseline.print_edges()
+    
+    # Generate reports
+    save_text_report(baseline.graph, model_name="GES", output_dir=".")
+    save_edge_list(baseline.graph, model_name="GES", output_dir=".")
     
     baseline.visualize(title="GES Algorithm - Causal Graph")
 

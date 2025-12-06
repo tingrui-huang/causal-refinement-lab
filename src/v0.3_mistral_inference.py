@@ -5,7 +5,10 @@ import numpy as np
 import sys
 import json
 from datetime import datetime
+from sklearn.metrics import mutual_info_score
+from scipy.stats import chi2_contingency
 from huggingface_hub import InferenceClient
+from report_generator import save_text_report, save_edge_list
 
 
 class CausalDiscoveryAgentZephyr:
@@ -44,13 +47,16 @@ class CausalDiscoveryAgentZephyr:
             "Anxiety": "Mental health status.",
             "Peer_Pressure": "Social influence to smoke.",
         }
+        
+        # Statistics for validation
+        self.validation_passed = 0
+        self.validation_failed = 0
 
-    def scanner(self, threshold=0.1):
+    def scanner(self, threshold=0.05):
         """
-        [Scanner Module]
+        [Scanner Module v2.0]
+        Use Mutual Information for discrete/binary data
         """
-        corr_matrix = self.df.corr().abs()
-
         candidates = []
         for i, node_a in enumerate(self.nodes):
             for j, node_b in enumerate(self.nodes):
@@ -59,9 +65,9 @@ class CausalDiscoveryAgentZephyr:
                 if self.graph.has_edge(node_a, node_b) or self.graph.has_edge(node_b, node_a):
                     continue
 
-                score = corr_matrix.loc[node_a, node_b]
-                if score > threshold:
-                    candidates.append((node_a, node_b, score))
+                mi_score = mutual_info_score(self.df[node_a], self.df[node_b])
+                if mi_score > threshold:
+                    candidates.append((node_a, node_b, mi_score))
 
         candidates.sort(key=lambda x: x[2], reverse=True)
         return candidates
@@ -134,6 +140,27 @@ Reasoning: [/INST]"""
             traceback.print_exc()
             return "Direction: None"
 
+    def validate_edge_with_data(self, node_a, node_b, significance_level=0.05):
+        """
+        [Data-Driven Validation]
+        Verify if LLM's suggestion is supported by data using Chi-Square test.
+        
+        Returns:
+        --------
+        tuple: (is_valid, p_value)
+            is_valid: True if data supports the edge (p < significance_level)
+            p_value: statistical significance
+        """
+        # Create contingency table
+        contingency_table = pd.crosstab(self.df[node_a], self.df[node_b])
+        
+        # Chi-square test for independence
+        chi2, p_value, dof, expected = chi2_contingency(contingency_table)
+        
+        is_valid = p_value < significance_level
+        
+        return is_valid, p_value
+    
     def parse_response(self, response_text, node_a, node_b):
         """
         [Translator B: Text -> Graph]
@@ -182,8 +209,18 @@ Reasoning: [/INST]"""
 
             edge = self.parse_response(response, node_a, node_b)
             if edge:
-                print(f"Action: Adding edge {edge[0]} -> {edge[1]}")
-                self.graph.add_edge(edge[0], edge[1])
+                # Data-Driven Validation
+                is_valid, p_value = self.validate_edge_with_data(edge[0], edge[1])
+                
+                if is_valid:
+                    print(f"[PASS] Data Validated: {edge[0]}->{edge[1]} (p={p_value:.4f})")
+                    self.graph.add_edge(edge[0], edge[1])
+                    self.validation_passed += 1
+                else:
+                    print(f"[FAIL] Data Conflict: LLM said yes, but data says independent (p={p_value:.4f})")
+                    print(f"       -> Edge {edge[0]}->{edge[1]} REJECTED by validation")
+                    self.graph.add_edge(edge[0], edge[1], type='rejected')
+                    self.validation_failed += 1
             else:
                 print("Action: No edge added (Expert rejected or unsure).")
                 self.graph.add_edge(node_a, node_b, type='rejected')
@@ -193,6 +230,17 @@ Reasoning: [/INST]"""
         
         # Save CoT log at the end
         self.save_cot_log()
+        
+        # Print validation statistics
+        print("\n" + "="*50)
+        print("VALIDATION STATISTICS")
+        print("="*50)
+        print(f"Edges passed validation:  {self.validation_passed}")
+        print(f"Edges failed validation:  {self.validation_failed}")
+        if (self.validation_passed + self.validation_failed) > 0:
+            pass_rate = (self.validation_passed / (self.validation_passed + self.validation_failed)) * 100
+            print(f"Validation pass rate:     {pass_rate:.1f}%")
+        print("="*50)
     
     def save_cot_log(self):
         """
@@ -247,5 +295,10 @@ if __name__ == "__main__":
     
     print(f"\nStarting causal discovery loop with max {max_steps} steps...")
     agent.run_loop(max_steps=max_steps)
+    
+    # Generate reports
+    save_text_report(agent.graph, model_name="Zephyr-CoT", cot_log=agent.cot_log, output_dir=".")
+    save_edge_list(agent.graph, model_name="Zephyr-CoT", output_dir=".")
+    
     agent.visualize()
 
