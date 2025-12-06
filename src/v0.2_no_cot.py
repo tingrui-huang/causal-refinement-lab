@@ -96,16 +96,28 @@ Answer in this exact format: "Direction: A->B", "Direction: B->A", or "Direction
     def parse_response(self, response_text, node_a, node_b):
         """
         [Translator B: Text -> Graph]
+        Enhanced version: handles variable names, A/B notation, arrows, etc.
         """
-        clean_text = response_text.replace(" ", "")
+        text = response_text.lower().replace(" ", "").replace("\n", "")
         
-        if "Direction:A->B" in clean_text or "A->B" in clean_text:
+        # normalize arrows
+        text = text.replace("→", "->").replace("->", "->")
+        
+        # match patterns like "smoking->lung_cancer"
+        pattern_ab = f"{node_a.lower()}->{node_b.lower()}"
+        pattern_ba = f"{node_b.lower()}->{node_a.lower()}"
+        
+        if pattern_ab in text:
             return (node_a, node_b)
-        
-        elif "Direction:B->A" in clean_text or "B->A" in clean_text:
+        elif pattern_ba in text:
             return (node_b, node_a)
-            
-        elif "Direction:A<->B" in clean_text:
+        
+        # match A->B or B->A
+        elif "direction:a->b" in text or "a->b" in text:
+            return (node_a, node_b)
+        elif "direction:b->a" in text or "b->a" in text:
+            return (node_b, node_a)
+        elif "direction:a<->b" in text:
             return None
             
         else:
@@ -170,4 +182,3 @@ if __name__ == "__main__":
     print(f"\nStarting causal discovery loop with max {max_steps} steps...")
     agent.run_loop(max_steps=max_steps)
     agent.visualize()
-

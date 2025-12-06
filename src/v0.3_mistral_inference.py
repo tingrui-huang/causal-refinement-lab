@@ -2,28 +2,38 @@ import pandas as pd
 import networkx as nx
 import matplotlib.pyplot as plt
 import numpy as np
-import openai
 import sys
 import json
 from datetime import datetime
+from huggingface_hub import InferenceClient
 
 
-class CausalDiscoveryAgent:
-    def __init__(self, data_path, api_key):
-        # 1. Load Data
+class CausalDiscoveryAgentZephyr:
+    def __init__(self, data_path, hf_token):
         self.df = pd.read_csv(data_path)
         self.nodes = self.df.columns.tolist()
         self.graph = nx.DiGraph()
         self.graph.add_nodes_from(self.nodes)
 
-        self.client = openai.OpenAI(api_key=api_key)
+        print(f"Loaded data: {self.df.shape}")
+        print(f"\nInitializing Hugging Face Inference API...")
+        
+        # Using Zephyr-7B (proven to work with text_generation on HF Inference)
+        # Many newer models get routed to "together" provider which only supports chat
+        model_id = "HuggingFaceH4/zephyr-7b-beta"
+        
+        self.client = InferenceClient(
+            model=model_id,
+            token=hf_token
+        )
         
         # Initialize CoT reasoning log
         self.cot_log = []
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.log_file = f"cot_reasoning_gpt35_{timestamp}.json"
-
-        print(f"Loaded data: {self.df.shape}")
+        self.log_file = f"cot_reasoning_zephyr_{timestamp}.json"
+        
+        print(f"Inference client ready! Using {model_id}")
+        print("(No GPU needed, running on HF cloud)")
         print(f"[LOG] CoT reasoning will be saved to: {self.log_file}")
 
         self.descriptions = {
@@ -37,9 +47,8 @@ class CausalDiscoveryAgent:
 
     def scanner(self, threshold=0.1):
         """
-        Should be Residual Association, but here use correlation
+        [Scanner Module]
         """
-        # Full correlation matrix
         corr_matrix = self.df.corr().abs()
 
         candidates = []
@@ -47,7 +56,6 @@ class CausalDiscoveryAgent:
             for j, node_b in enumerate(self.nodes):
                 if i >= j: continue
 
-                # if we have (A->B or B->A)，ski[
                 if self.graph.has_edge(node_a, node_b) or self.graph.has_edge(node_b, node_a):
                     continue
 
@@ -55,20 +63,18 @@ class CausalDiscoveryAgent:
                 if score > threshold:
                     candidates.append((node_a, node_b, score))
 
-        # RankedExpand [cite: 323]
         candidates.sort(key=lambda x: x[2], reverse=True)
         return candidates
 
     def generate_prompt(self, node_a, node_b):
         """
         [Translator A: Graph -> Text]
-        CoT
+        WITH Chain-of-Thought Prompting
         """
         desc_a = self.descriptions.get(node_a, "A medical variable.")
         desc_b = self.descriptions.get(node_b, "A medical variable.")
 
-        # TODO: Think about AutoBPO
-        prompt = f"""Role: You are an expert in Medical Science performing Causal Discovery.
+        prompt = f"""[INST] You are an expert in Medical Science performing Causal Discovery.
 
 Task: Analyze the relationship between two variables from a dataset:
 Variable A: {node_a} ({desc_a})
@@ -82,34 +88,35 @@ Instructions:
 3. Provide your reasoning briefly.
 4. Final Answer format: "Direction: A->B", "Direction: B->A", or "Direction: None".
 
-Reasoning:"""
+Reasoning: [/INST]"""
         return prompt
 
     def ask_expert(self, node_a, node_b):
         """
-        [Expert Module] : Ancestral Oracle
+        [Expert Module] - Using chat_completion (works with all providers)
         """
         prompt = self.generate_prompt(node_a, node_b)
 
-        print(f"\n--- Asking LLM about {node_a} vs {node_b} ---")
+        print(f"\n--- Asking Zephyr about {node_a} vs {node_b} ---")
 
         try:
-            response = self.client.chat.completions.create(
-                model="gpt-3.5-turbo",
+            # Use chat_completion instead of text_generation
+            # This works with all HF Inference providers
+            response = self.client.chat_completion(
                 messages=[
-                    {"role": "system", "content": "You are an expert in medical causal inference."},
                     {"role": "user", "content": prompt}
                 ],
+                max_tokens=128,
                 temperature=0.7,
-                max_tokens=300
             )
+            
             response_text = response.choices[0].message.content
-            print(f"LLM Response: {response_text[:100]}...")
+            print(f"Zephyr Response: {response_text[:100]}...")
             
             # Log CoT reasoning
             self.cot_log.append({
                 "timestamp": datetime.now().isoformat(),
-                "model": "gpt-3.5-turbo",
+                "model": "HuggingFaceH4/zephyr-7b-beta",
                 "node_a": node_a,
                 "node_b": node_b,
                 "prompt": prompt,
@@ -119,8 +126,13 @@ Reasoning:"""
             
             return response_text
         except Exception as e:
-            print(f"Error calling API: {e}")
-            return "Reasoning: Error occurred. Direction: None"
+            import traceback
+            print(f"\n✗ Error calling HF Inference API:")
+            print(f"Error type: {type(e).__name__}")
+            print(f"Error message: {repr(e)}")
+            print("\nFull traceback:")
+            traceback.print_exc()
+            return "Direction: None"
 
     def parse_response(self, response_text, node_a, node_b):
         """
@@ -158,20 +170,16 @@ Reasoning:"""
         """
         step = 0
         while step < max_steps:
-            # 1. Scan for best candidates
             candidates = self.scanner()
             if not candidates:
                 print("No more suspicious pairs found.")
                 break
 
-            # 2. Pick the best one (RankedExpand)
             node_a, node_b, score = candidates[0]
 
-            # 3. Ask Expert
             response = self.ask_expert(node_a, node_b)
             print(f"Expert Response: {response}")
 
-            # 4. Refine Graph
             edge = self.parse_response(response, node_a, node_b)
             if edge:
                 print(f"Action: Adding edge {edge[0]} -> {edge[1]}")
@@ -185,7 +193,7 @@ Reasoning:"""
         
         # Save CoT log at the end
         self.save_cot_log()
-
+    
     def save_cot_log(self):
         """
         Save CoT reasoning log to JSON file
@@ -194,34 +202,46 @@ Reasoning:"""
             json.dump(self.cot_log, f, indent=2, ensure_ascii=True)
         print(f"\n[LOG] CoT reasoning saved to: {self.log_file}")
         print(f"[LOG] Total reasoning steps: {len(self.cot_log)}")
-    
+
     def visualize(self):
         pos = nx.circular_layout(self.graph)
         valid_edges = [(u, v) for u, v, d in self.graph.edges(data=True) if d.get('type') != 'rejected']
 
         plt.figure(figsize=(10, 8))
-        nx.draw_networkx_nodes(self.graph, pos, node_size=2000, node_color='lightblue')
+        nx.draw_networkx_nodes(self.graph, pos, node_size=2000, node_color='lightcoral')
         nx.draw_networkx_labels(self.graph, pos)
-        nx.draw_networkx_edges(self.graph, pos, edgelist=valid_edges, edge_color='green', width=2, arrowsize=50)
-        plt.title("Expert-in-the-Loop Causal Graph (v0.2 - Real API)")
+        nx.draw_networkx_edges(self.graph, pos, edgelist=valid_edges, edge_color='purple', width=2, arrowsize=50)
+        plt.title("Expert-in-the-Loop Causal Graph (Zephyr-7B via Inference API)")
         plt.show()
 
 
-# --- Execution ---
 if __name__ == "__main__":
-    print("=" * 50)
-    print("Causal Discovery with LLM Expert (v0.2)")
-    print("=" * 50)
-
-    api_key = input("\nPlease enter your OpenAI API key: ").strip()
+    print("="*60)
+    print("Causal Discovery with Zephyr-7B-Beta")
+    print("Using Hugging Face Inference API (NO GPU NEEDED)")
+    print("="*60)
     
-    if not api_key:
-        print("Error: API key cannot be empty!")
+    print("\n" + "!"*60)
+    print("IMPORTANT: You need a Hugging Face token")
+    print("1. Get your token from https://huggingface.co/settings/tokens")
+    print("2. Zephyr-7B is open-source, no special access needed")
+    print("3. Proven to work with HF Inference text_generation")
+    print("\nAdvantages:")
+    print("  - No GPU required")
+    print("  - No model download")
+    print("  - Runs on HF cloud")
+    print("  - No provider routing issues")
+    print("!"*60 + "\n")
+    
+    hf_token = input("Please enter your Hugging Face token: ").strip()
+    
+    if not hf_token:
+        print("Error: Token cannot be empty!")
         sys.exit(1)
     
-    print("\nInitializing agent...")
-    agent = CausalDiscoveryAgent("../lucas0_train.csv", api_key)
-
+    print("\nInitializing agent with Zephyr-7B Inference API...")
+    agent = CausalDiscoveryAgentZephyr("../lucas0_train.csv", hf_token=hf_token)
+    
     max_steps_input = input("\nHow many iterations to run? (default: 50): ").strip()
     max_steps = int(max_steps_input) if max_steps_input else 50
     
