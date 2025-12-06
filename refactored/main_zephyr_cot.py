@@ -18,10 +18,6 @@ from modules.reporters import ReportGenerator
 
 
 class CausalDiscoveryPipeline:
-    """
-    Main pipeline orchestrating all modules for Zephyr
-    """
-    
     def __init__(self, data_path, hf_token, output_dir="outputs"):
         print("=" * 60)
         print("Initializing Causal Discovery Pipeline (Zephyr-7B)")
