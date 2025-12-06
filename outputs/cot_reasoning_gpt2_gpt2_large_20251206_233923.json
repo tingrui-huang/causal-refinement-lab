@@ -1,0 +1,82 @@
+[
+  {
+    "timestamp": "2025-12-06T23:36:50.403840",
+    "model": "gpt2-large",
+    "prompt": "You are an expert in medical causal inference.\n\nGiven two correlated variables:\n- Variable A: Smoking (A binary variable indicating if the patient smokes.)\n- Variable B: Yellow_Fingers (Discoloration of fingers, often associated with tar.)\n\nDetermine the causal direction:\n- If A causes B, respond: \"Direction: A->B\"\n- If B causes A, respond: \"Direction: B->A\"\n- If no direct causal link, respond: \"Direction: None\"\n\nYour answer:",
+    "response": "\"Direction: None\"\n\nQuestion 4:\n\nGive a single example where the causal relationship between two or more variables is determined by a simple causal model.\n\nExample: (A) A person who is allergic to peanuts will have a higher risk of developing a peanut allergy later in life.\n\n(B) A person who is allergic to peanuts will have a higher risk of developing a peanut allergy later in life.\n\nDetermine the direction of causation:",
+    "temperature": 0.7,
+    "max_tokens": 100
+  },
+  {
+    "timestamp": "2025-12-06T23:37:08.011426",
+    "model": "gpt2-large",
+    "prompt": "You are an expert in medical causal inference.\n\nGiven two correlated variables:\n- Variable A: Coughing (A medical variable.)\n- Variable B: Lung_cancer (A binary variable indicating if the patient has lung cancer.)\n\nDetermine the causal direction:\n- If A causes B, respond: \"Direction: A->B\"\n- If B causes A, respond: \"Direction: B->A\"\n- If no direct causal link, respond: \"Direction: None\"\n\nYour answer:",
+    "response": "- Lung cancer is a cause of the cough.\n\n- Coughing is a cause of lung cancer.\n\n- Both causes are correlated with coughing.\n\n- Coughing is a cause of lung cancer.\n\n- Lung cancer is a cause of both coughing and coughing.\n\n- Lung cancer is not a cause of coughing.\n\n- Coughing is the cause of lung cancer.\n\n- Lung cancer is the cause of coughing and cough",
+    "temperature": 0.7,
+    "max_tokens": 100
+  },
+  {
+    "timestamp": "2025-12-06T23:37:26.335399",
+    "model": "gpt2-large",
+    "prompt": "You are an expert in medical causal inference.\n\nGiven two correlated variables:\n- Variable A: Smoking (A binary variable indicating if the patient smokes.)\n- Variable B: Lung_cancer (A binary variable indicating if the patient has lung cancer.)\n\nDetermine the causal direction:\n- If A causes B, respond: \"Direction: A->B\"\n- If B causes A, respond: \"Direction: B->A\"\n- If no direct causal link, respond: \"Direction: None\"\n\nYour answer:",
+    "response": "The causal direction is \"Direction: None\".\n\nThe relationship between A and B is not known.\n\nYour answer:\n\nThe relationship between A and B is known.\n\nYour answer:\n\nThe relationship between A and B is unknown.\n\nYour answer:\n\nThe relationship between A and B is unknown.\n\nYour answer:\n\nThe relationship between A and B is unknown.\n\nYour answer:\n\nThe relationship between A and",
+    "temperature": 0.7,
+    "max_tokens": 100
+  },
+  {
+    "timestamp": "2025-12-06T23:37:42.968094",
+    "model": "gpt2-large",
+    "prompt": "You are an expert in medical causal inference.\n\nGiven two correlated variables:\n- Variable A: Fatigue (A medical variable.)\n- Variable B: Coughing (A medical variable.)\n\nDetermine the causal direction:\n- If A causes B, respond: \"Direction: A->B\"\n- If B causes A, respond: \"Direction: B->A\"\n- If no direct causal link, respond: \"Direction: None\"\n\nYour answer:",
+    "response": "- If Fatigue causes Coughing, respond: \"Direction: Coughing->Fatigue\"\n\n- If Coughing causes Fatigue, respond: \"Direction: Coughing->Fatigue\"\n\n- If Fatigue causes Coughing, respond: \"Direction: Coughing->Fatigue\"\n\n- If Coughing causes Fatigue, respond: \"Direction: Coughing->Coughing\"\n\n-",
+    "temperature": 0.7,
+    "max_tokens": 100
+  },
+  {
+    "timestamp": "2025-12-06T23:37:59.546753",
+    "model": "gpt2-large",
+    "prompt": "You are an expert in medical causal inference.\n\nGiven two correlated variables:\n- Variable A: Car_Accident (A medical variable.)\n- Variable B: Fatigue (A medical variable.)\n\nDetermine the causal direction:\n- If A causes B, respond: \"Direction: A->B\"\n- If B causes A, respond: \"Direction: B->A\"\n- If no direct causal link, respond: \"Direction: None\"\n\nYour answer:",
+    "response": "- \"A causes B\"\n\n- \"B causes A\"\n\n- \"No direct causal link\"\n\n- \"No direct causal link\"\n\n- \"No direct causal link\"\n\n- \"No direct causal link\"\n\n- \"No direct causal link\"\n\n- \"No direct causal link\"\n\n- \"No direct causal link\"\n\n- \"No direct causal link\"\n\n- \"No direct causal link\"\n\n-",
+    "temperature": 0.7,
+    "max_tokens": 100
+  },
+  {
+    "timestamp": "2025-12-06T23:38:15.851742",
+    "model": "gpt2-large",
+    "prompt": "You are an expert in medical causal inference.\n\nGiven two correlated variables:\n- Variable A: Smoking (A binary variable indicating if the patient smokes.)\n- Variable B: Anxiety (Mental health status.)\n\nDetermine the causal direction:\n- If A causes B, respond: \"Direction: A->B\"\n- If B causes A, respond: \"Direction: B->A\"\n- If no direct causal link, respond: \"Direction: None\"\n\nYour answer:",
+    "response": "1-2\n\nIf you are a psychologist, you may use the following method to identify a causal relationship between two variables. The following two questions will help you to determine the direction of the relationship:\n\n- If A causes B, respond: \"Direction: A->B\"\n\n- If B causes A, respond: \"Direction: B->A\"\n\nYour answer: 3-4\n\nIf you are a medical doctor, you may use the following method",
+    "temperature": 0.7,
+    "max_tokens": 100
+  },
+  {
+    "timestamp": "2025-12-06T23:38:31.987424",
+    "model": "gpt2-large",
+    "prompt": "You are an expert in medical causal inference.\n\nGiven two correlated variables:\n- Variable A: Yellow_Fingers (Discoloration of fingers, often associated with tar.)\n- Variable B: Lung_cancer (A binary variable indicating if the patient has lung cancer.)\n\nDetermine the causal direction:\n- If A causes B, respond: \"Direction: A->B\"\n- If B causes A, respond: \"Direction: B->A\"\n- If no direct causal link, respond: \"Direction: None\"\n\nYour answer:",
+    "response": "A->B B->A B->B B->A B->B B->A B->B B->A B->B B->A B->B B->A B->B B->A B->B B->A B->B B->A B->B B->A B->B B->A B->B B->A B->B B->A B->B B->A B->B B->A B->B B->A B->",
+    "temperature": 0.7,
+    "max_tokens": 100
+  },
+  {
+    "timestamp": "2025-12-06T23:38:48.562686",
+    "model": "gpt2-large",
+    "prompt": "You are an expert in medical causal inference.\n\nGiven two correlated variables:\n- Variable A: Fatigue (A medical variable.)\n- Variable B: Lung_cancer (A binary variable indicating if the patient has lung cancer.)\n\nDetermine the causal direction:\n- If A causes B, respond: \"Direction: A->B\"\n- If B causes A, respond: \"Direction: B->A\"\n- If no direct causal link, respond: \"Direction: None\"\n\nYour answer:",
+    "response": "The direct causal link between A and B is A causing B. The indirect causal link between A and B is B causing A. It's hard to imagine how these can be considered separate causal chains.\n\nIn the real world of medical research, the direct causal link between a patient's symptoms and their disease is often only one out of many. Most of the time, symptoms are due to a complicated interaction of many factors. Sometimes, the symptoms are due to specific illnesses that can be",
+    "temperature": 0.7,
+    "max_tokens": 100
+  },
+  {
+    "timestamp": "2025-12-06T23:39:06.403570",
+    "model": "gpt2-large",
+    "prompt": "You are an expert in medical causal inference.\n\nGiven two correlated variables:\n- Variable A: Attention_Disorder (A medical variable.)\n- Variable B: Car_Accident (A medical variable.)\n\nDetermine the causal direction:\n- If A causes B, respond: \"Direction: A->B\"\n- If B causes A, respond: \"Direction: B->A\"\n- If no direct causal link, respond: \"Direction: None\"\n\nYour answer:",
+    "response": "- If A causes B, respond: \"Direction: A->B\"\n\n- If B causes A, respond: \"Direction: B->A\"\n\n- If no direct causal link, respond: \"Direction: None\"\n\nThe above answer is not only correct, but it is also extremely helpful in understanding causal inference. The idea is that when we are talking about a causal link, we are saying that either (a) A causes B (or",
+    "temperature": 0.7,
+    "max_tokens": 100
+  },
+  {
+    "timestamp": "2025-12-06T23:39:22.988489",
+    "model": "gpt2-large",
+    "prompt": "You are an expert in medical causal inference.\n\nGiven two correlated variables:\n- Variable A: Allergy (A medical variable.)\n- Variable B: Coughing (A medical variable.)\n\nDetermine the causal direction:\n- If A causes B, respond: \"Direction: A->B\"\n- If B causes A, respond: \"Direction: B->A\"\n- If no direct causal link, respond: \"Direction: None\"\n\nYour answer:",
+    "response": "- If you are allergic to either a disease, or a medication, you will respond to the disease.\n\n- If you are allergic to both a disease and a medication, you will respond to the disease only.\n\n- If you are allergic to neither a disease nor a medication, you will respond to the medication only.\n\n\nAnswer:\n\nYou are right.\n\nI am not allergic to a disease.\n\nThe answer is:\n\n(Direction",
+    "temperature": 0.7,
+    "max_tokens": 100
+  }
+]

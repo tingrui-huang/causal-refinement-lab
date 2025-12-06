@@ -34,14 +34,6 @@ class BaseAPIClient:
 
 class GPT35Client(BaseAPIClient):
     def __init__(self, api_key):
-        """
-        Initialize GPT-3.5 client
-        
-        Parameters:
-        -----------
-        api_key : str
-            OpenAI API key
-        """
         super().__init__(api_key, "gpt-3.5-turbo")
         self.client = openai.OpenAI(api_key=api_key)
         print(f"[API] Initialized: {self.model_name}")
@@ -191,4 +183,69 @@ class MistralClient(HuggingFaceInferenceClient):
     def __init__(self, hf_token):
         super().__init__(hf_token, model_id="mistralai/Mistral-7B-Instruct-v0.3")
         print("[API] Model: Mistral-7B-Instruct (open-source)")
+
+
+class GPT2Client(BaseAPIClient):
+    
+    def __init__(self, model_id="gpt2-large"):
+        self.model_name = model_id
+        self.call_log = []
+        
+        print(f"[API] Initialized: {model_id}")
+        print("[API] Loading GPT-2 locally (CPU)...")
+        print("[API] Note: GPT-2 is a smaller model, may have limited reasoning")
+        
+        try:
+            from transformers import pipeline
+            
+            # Load model locally
+            # device=-1 means CPU, if you have GPU with cuda, use device=0
+            self.pipe = pipeline(
+                "text-generation", 
+                model=model_id, 
+                device=-1
+            )
+            print("[API] Local GPT-2 model loaded successfully!")
+            
+        except Exception as e:
+            print(f"[ERROR] Failed to load model: {e}")
+            import sys
+            sys.exit(1)
+    
+    def call(self, prompt, temperature=0.7, max_tokens=150):
+        print(f"[LLM] Querying local {self.model_name}...")
+        
+        try:
+            # Local inference
+            # max_new_tokens controls generation length
+            # pad_token_id=50256 prevents warning
+            outputs = self.pipe(
+                prompt,
+                max_new_tokens=max_tokens,
+                num_return_sequences=1,
+                pad_token_id=50256,
+                truncation=True
+            )
+            
+            # Extract generated text
+            response_text = outputs[0]['generated_text']
+            
+            # GPT-2 may include the prompt in output, we need to remove it
+            # Or just take the last part
+            response_text = response_text.replace(prompt, "").strip()
+            
+            print(f"[LLM] Response: {response_text[:100]}...")
+            
+            # Log the call
+            self.log_call(prompt, response_text, {
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "model": self.model_name
+            })
+            
+            return response_text
+            
+        except Exception as e:
+            print(f"[ERROR] Local inference failed: {e}")
+            return "Reasoning: Error occurred. Direction: None"
 

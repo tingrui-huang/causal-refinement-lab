@@ -1,0 +1,11 @@
+source,target,status
+Smoking,Yellow_Fingers,accepted
+Smoking,Lung_cancer,accepted
+Smoking,Anxiety,accepted
+Yellow_Fingers,Lung_cancer,rejected
+Attention_Disorder,Car_Accident,rejected
+Car_Accident,Fatigue,accepted
+Fatigue,Coughing,accepted
+Allergy,Coughing,accepted
+Lung_cancer,Coughing,accepted
+Lung_cancer,Fatigue,accepted

@@ -1,0 +1,27 @@
+============================================================
+Causal Discovery Report: GPT-3.5-NoCoT
+============================================================
+Generated: 2025-12-06 23:11:18
+Total Nodes: 12
+Total Iterations: 10
+============================================================
+
+ACCEPTED CAUSAL EDGES: 2
+------------------------------------------------------------
+   1. [YES] Smoking -> Lung_cancer
+   2. [YES] Smoking -> Yellow_Fingers
+
+============================================================
+
+REJECTED EDGES: 8
+------------------------------------------------------------
+   1. [NO]  Allergy -> Coughing
+   2. [NO]  Attention_Disorder -> Car_Accident
+   3. [NO]  Car_Accident -> Fatigue
+   4. [NO]  Coughing -> Lung_cancer
+   5. [NO]  Fatigue -> Coughing
+   6. [NO]  Fatigue -> Lung_cancer
+   7. [NO]  Smoking -> Anxiety
+   8. [NO]  Yellow_Fingers -> Lung_cancer
+
+============================================================

@@ -1,0 +1,27 @@
+============================================================
+Causal Discovery Report: Zephyr-CoT
+============================================================
+Generated: 2025-12-06 23:15:32
+Total Nodes: 12
+Total Iterations: 10
+============================================================
+
+ACCEPTED CAUSAL EDGES: 8
+------------------------------------------------------------
+   1. [YES] Allergy -> Coughing
+   2. [YES] Car_Accident -> Attention_Disorder
+   3. [YES] Fatigue -> Car_Accident
+   4. [YES] Fatigue -> Coughing
+   5. [YES] Lung_cancer -> Yellow_Fingers
+   6. [YES] Smoking -> Anxiety
+   7. [YES] Smoking -> Lung_cancer
+   8. [YES] Smoking -> Yellow_Fingers
+
+============================================================
+
+REJECTED EDGES: 2
+------------------------------------------------------------
+   1. [NO]  Coughing -> Lung_cancer
+   2. [NO]  Fatigue -> Lung_cancer
+
+============================================================

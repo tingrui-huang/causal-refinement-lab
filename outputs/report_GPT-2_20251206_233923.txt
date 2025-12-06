@@ -1,0 +1,27 @@
+============================================================
+Causal Discovery Report: GPT-2
+============================================================
+Generated: 2025-12-06 23:39:23
+Total Nodes: 12
+Total Iterations: 10
+============================================================
+
+ACCEPTED CAUSAL EDGES: 3
+------------------------------------------------------------
+   1. [YES] Attention_Disorder -> Car_Accident
+   2. [YES] Coughing -> Fatigue
+   3. [YES] Smoking -> Anxiety
+
+============================================================
+
+REJECTED EDGES: 7
+------------------------------------------------------------
+   1. [NO]  Allergy -> Coughing
+   2. [NO]  Car_Accident -> Fatigue
+   3. [NO]  Coughing -> Lung_cancer
+   4. [NO]  Fatigue -> Lung_cancer
+   5. [NO]  Smoking -> Lung_cancer
+   6. [NO]  Smoking -> Yellow_Fingers
+   7. [NO]  Yellow_Fingers -> Lung_cancer
+
+============================================================

@@ -40,7 +40,7 @@ class GESAlgorithm(BaseAlgorithm):
             learned_graph = record['G']
             
             print(f"[GES] Algorithm completed")
-            print(f"[GES] Found {learned_graph.num_edges} edges")
+            print(f"[GES] Found {learned_graph.get_num_edges()} edges")
             
             # Convert to NetworkX DiGraph
             self.graph = self._convert_to_networkx(learned_graph)
@@ -86,6 +86,7 @@ class FCIAlgorithm(BaseAlgorithm):
         super().__init__(dataframe, nodes)
         print("[ALGORITHM] FCI (Fast Causal Inference)")
         print("[ALGORITHM] Allows: Latent confounders")
+        self.causallearn_graph = None
     
     def run(self, independence_test='fisherz', alpha=0.05):
         try:
@@ -105,6 +106,9 @@ class FCIAlgorithm(BaseAlgorithm):
             print(f"[FCI] Algorithm completed")
             print(f"[FCI] Found {len(edges)} edges")
             
+            # Store the causal-learn graph for later analysis
+            self.causallearn_graph = graph_result
+            
             # Convert to NetworkX DiGraph
             self.graph = self._convert_to_networkx(graph_result)
             
@@ -117,6 +121,49 @@ class FCIAlgorithm(BaseAlgorithm):
         except Exception as e:
             print(f"[ERROR] FCI failed: {e}")
             raise
+    
+    def get_ambiguous_edges(self):
+        """
+        Extract edges that FCI cannot determine direction for
+        These are edges with circles (o-o or o->)
+        
+        Returns:
+        --------
+        list of tuples: [(node_a, node_b), ...] where direction is ambiguous
+        """
+        if self.causallearn_graph is None:
+            print("[WARNING] FCI has not been run yet!")
+            return []
+        
+        ambiguous_pairs = []
+        adj_matrix = self.causallearn_graph.graph
+        
+        # causal-learn encoding:
+        # -1: arrowhead (>), 1: tail (-), 2: circle (o)
+        
+        for i in range(len(self.nodes)):
+            for j in range(len(self.nodes)):
+                if i >= j:
+                    continue
+                
+                edge_i = adj_matrix[i, j]
+                edge_j = adj_matrix[j, i]
+                
+                # Check for ambiguous edges:
+                # o-o (both circles)
+                if edge_i == 2 and edge_j == 2:
+                    ambiguous_pairs.append((self.nodes[i], self.nodes[j], 'o-o'))
+                
+                # o-> (circle at i, arrow at j)
+                elif edge_i == 2 and edge_j == -1:
+                    ambiguous_pairs.append((self.nodes[i], self.nodes[j], 'o->'))
+                
+                # <-o (arrow at i, circle at j)
+                elif edge_i == -1 and edge_j == 2:
+                    ambiguous_pairs.append((self.nodes[j], self.nodes[i], 'o->'))
+        
+        print(f"[FCI] Found {len(ambiguous_pairs)} ambiguous edges")
+        return ambiguous_pairs
     
     def _convert_to_networkx(self, causallearn_graph):
         graph = nx.DiGraph()
