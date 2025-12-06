@@ -2,15 +2,26 @@ import pandas as pd
 import networkx as nx
 import matplotlib.pyplot as plt
 import numpy as np
+import os
+from datetime import datetime
 from causallearn.search.ScoreBased.GES import ges
 from report_generator import save_text_report, save_edge_list
 
 
 class GESBaseline:
-    def __init__(self, data_path):
+    def __init__(self, data_path, output_dir="outputs"):
         # Load Data
         self.df = pd.read_csv(data_path)
         self.nodes = self.df.columns.tolist()
+        
+        # Create output directory
+        self.output_dir = output_dir
+        os.makedirs(self.output_dir, exist_ok=True)
+        print(f"[OUTPUT] Results will be saved to: {self.output_dir}/")
+        
+        # Model metadata
+        self.model_name = "baseline_ges"
+        self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
         print(f"Loaded data: {self.df.shape}")
         print(f"Variables: {self.nodes}")
@@ -64,7 +75,7 @@ class GESBaseline:
         
         print(f"Converted to NetworkX graph with {edge_count} directed edges")
 
-    def visualize(self, title="GES Causal Discovery Result"):
+    def visualize(self, title="GES Causal Discovery Result", save_only=False):
         """
         Visualize the learned causal graph
         """
@@ -82,7 +93,16 @@ class GESBaseline:
         plt.title(title, fontsize=16)
         plt.axis('off')
         plt.tight_layout()
-        plt.show()
+        
+        # Save figure
+        fig_path = os.path.join(self.output_dir, f"causal_graph_{self.model_name}_{self.timestamp}.png")
+        plt.savefig(fig_path, dpi=300, bbox_inches='tight')
+        print(f"[OUTPUT] Graph saved to: {fig_path}")
+        
+        if not save_only:
+            plt.show()
+        else:
+            plt.close()
 
     def print_edges(self):
         """
@@ -117,8 +137,8 @@ if __name__ == "__main__":
     baseline.print_edges()
     
     # Generate reports
-    save_text_report(baseline.graph, model_name="GES", output_dir=".")
-    save_edge_list(baseline.graph, model_name="GES", output_dir=".")
+    save_text_report(baseline.graph, model_name="GES", output_dir=baseline.output_dir)
+    save_edge_list(baseline.graph, model_name="GES", output_dir=baseline.output_dir)
     
     baseline.visualize(title="GES Algorithm - Causal Graph")
 

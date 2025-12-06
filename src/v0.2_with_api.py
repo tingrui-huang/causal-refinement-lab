@@ -5,6 +5,7 @@ import numpy as np
 import openai
 import sys
 import json
+import os
 from datetime import datetime
 from sklearn.metrics import mutual_info_score
 from scipy.stats import chi2_contingency
@@ -12,7 +13,7 @@ from report_generator import save_text_report, save_edge_list
 
 
 class CausalDiscoveryAgent:
-    def __init__(self, data_path, api_key):
+    def __init__(self, data_path, api_key, output_dir="outputs"):
         # 1. Load Data
         self.df = pd.read_csv(data_path)
         self.nodes = self.df.columns.tolist()
@@ -21,10 +22,17 @@ class CausalDiscoveryAgent:
 
         self.client = openai.OpenAI(api_key=api_key)
         
+        # Create output directory
+        self.output_dir = output_dir
+        os.makedirs(self.output_dir, exist_ok=True)
+        print(f"[OUTPUT] Results will be saved to: {self.output_dir}/")
+        
         # Initialize CoT reasoning log
         self.cot_log = []
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.log_file = f"cot_reasoning_gpt35_{timestamp}.json"
+        self.model_name = "gpt35"
+        self.timestamp = timestamp
+        self.log_file = os.path.join(self.output_dir, f"cot_reasoning_{self.model_name}_{timestamp}.json")
 
         print(f"Loaded data: {self.df.shape}")
         print(f"[LOG] CoT reasoning will be saved to: {self.log_file}")
@@ -247,7 +255,7 @@ Reasoning:"""
         print(f"\n[LOG] CoT reasoning saved to: {self.log_file}")
         print(f"[LOG] Total reasoning steps: {len(self.cot_log)}")
     
-    def visualize(self):
+    def visualize(self, save_only=False):
         pos = nx.circular_layout(self.graph)
         valid_edges = [(u, v) for u, v, d in self.graph.edges(data=True) if d.get('type') != 'rejected']
 
@@ -256,7 +264,16 @@ Reasoning:"""
         nx.draw_networkx_labels(self.graph, pos)
         nx.draw_networkx_edges(self.graph, pos, edgelist=valid_edges, edge_color='green', width=2, arrowsize=50)
         plt.title("Expert-in-the-Loop Causal Graph (v0.2 - Real API)")
-        plt.show()
+        
+        # Save figure
+        fig_path = os.path.join(self.output_dir, f"causal_graph_{self.model_name}_{self.timestamp}.png")
+        plt.savefig(fig_path, dpi=300, bbox_inches='tight')
+        print(f"[OUTPUT] Graph saved to: {fig_path}")
+        
+        if not save_only:
+            plt.show()
+        else:
+            plt.close()
 
 
 # --- Execution ---
@@ -281,8 +298,8 @@ if __name__ == "__main__":
     agent.run_loop(max_steps=max_steps)
     
     # Generate reports
-    save_text_report(agent.graph, model_name="GPT-3.5-CoT", cot_log=agent.cot_log, output_dir=".")
-    save_edge_list(agent.graph, model_name="GPT-3.5-CoT", output_dir=".")
+    save_text_report(agent.graph, model_name="GPT-3.5-CoT", cot_log=agent.cot_log, output_dir=agent.output_dir)
+    save_edge_list(agent.graph, model_name="GPT-3.5-CoT", output_dir=agent.output_dir)
     
     agent.visualize()
 

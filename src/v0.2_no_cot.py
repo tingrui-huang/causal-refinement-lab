@@ -4,19 +4,30 @@ import matplotlib.pyplot as plt
 import numpy as np
 import openai
 import sys
+import os
 from sklearn.metrics import mutual_info_score
 from scipy.stats import chi2_contingency
 from report_generator import save_text_report, save_edge_list
 
 
 class CausalDiscoveryAgent:
-    def __init__(self, data_path, api_key):
+    def __init__(self, data_path, api_key, output_dir="outputs"):
         self.df = pd.read_csv(data_path)
         self.nodes = self.df.columns.tolist()
         self.graph = nx.DiGraph()
         self.graph.add_nodes_from(self.nodes)
 
         self.client = openai.OpenAI(api_key=api_key)
+        
+        # Create output directory
+        self.output_dir = output_dir
+        os.makedirs(self.output_dir, exist_ok=True)
+        print(f"[OUTPUT] Results will be saved to: {self.output_dir}/")
+        
+        # Model metadata
+        from datetime import datetime
+        self.model_name = "gpt35_no_cot"
+        self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
         print(f"Loaded data: {self.df.shape}")
 
@@ -198,7 +209,7 @@ Answer in this exact format: "Direction: A->B", "Direction: B->A", or "Direction
             print(f"Validation pass rate:     {pass_rate:.1f}%")
         print("="*50)
 
-    def visualize(self):
+    def visualize(self, save_only=False):
         pos = nx.circular_layout(self.graph)
         valid_edges = [(u, v) for u, v, d in self.graph.edges(data=True) if d.get('type') != 'rejected']
 
@@ -207,7 +218,16 @@ Answer in this exact format: "Direction: A->B", "Direction: B->A", or "Direction
         nx.draw_networkx_labels(self.graph, pos)
         nx.draw_networkx_edges(self.graph, pos, edgelist=valid_edges, edge_color='green', width=2, arrowsize=50)
         plt.title("Expert-in-the-Loop Causal Graph (v0.2 - NO CoT)")
-        plt.show()
+        
+        # Save figure
+        fig_path = os.path.join(self.output_dir, f"causal_graph_{self.model_name}_{self.timestamp}.png")
+        plt.savefig(fig_path, dpi=300, bbox_inches='tight')
+        print(f"[OUTPUT] Graph saved to: {fig_path}")
+        
+        if not save_only:
+            plt.show()
+        else:
+            plt.close()
 
 
 if __name__ == "__main__":
@@ -231,7 +251,7 @@ if __name__ == "__main__":
     agent.run_loop(max_steps=max_steps)
     
     # Generate reports
-    save_text_report(agent.graph, model_name="GPT-3.5-NoCoT", output_dir=".")
-    save_edge_list(agent.graph, model_name="GPT-3.5-NoCoT", output_dir=".")
+    save_text_report(agent.graph, model_name="GPT-3.5-NoCoT", output_dir=agent.output_dir)
+    save_edge_list(agent.graph, model_name="GPT-3.5-NoCoT", output_dir=agent.output_dir)
     
     agent.visualize()
