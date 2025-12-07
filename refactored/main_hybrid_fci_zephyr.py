@@ -12,7 +12,12 @@ import sys
 import os
 from datetime import datetime
 
-from modules.data_loader import LUCASDataLoader
+# Import config and utils
+from config import get_output_dir
+from utils import get_active_data_loader, print_dataset_info
+
+# Import modules from the modules package
+from modules.data_loader import DataLoader, LUCASDataLoader, ALARMDataLoader
 from modules.algorithms import FCIAlgorithm
 from modules.api_clients import ZephyrClient
 from modules.prompt_generators import ZephyrCoTPromptGenerator
@@ -23,17 +28,17 @@ from modules.reporters import ReportGenerator
 
 
 class HybridFCIZephyrPipeline:
-    def __init__(self, data_path, hf_token, output_dir="outputs"):
+    def __init__(self, data_loader, hf_token, output_dir=None):
         print("=" * 60)
         print("Initializing Hybrid FCI + Zephyr Pipeline")
         print("=" * 60)
         
-        self.output_dir = output_dir
+        self.output_dir = output_dir or get_output_dir()
         os.makedirs(self.output_dir, exist_ok=True)
         print(f"[OUTPUT] Results will be saved to: {self.output_dir}/")
 
         print("\n[1/6] Loading data...")
-        self.data_loader = LUCASDataLoader(data_path)
+        self.data_loader = data_loader
         self.df, self.nodes = self.data_loader.load_csv()
 
         print("\n[2/6] Setting up FCI algorithm...")
@@ -51,8 +56,8 @@ class HybridFCIZephyrPipeline:
         print("\n[6/6] Setting up validator...")
         self.validator = ChiSquareValidator(self.df)
 
-        self.visualizer = GraphVisualizer(output_dir)
-        self.reporter = ReportGenerator(output_dir)
+        self.visualizer = GraphVisualizer(self.output_dir)
+        self.reporter = ReportGenerator(self.output_dir)
         
         self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
@@ -76,6 +81,7 @@ class HybridFCIZephyrPipeline:
         self.graph = self.fci_algo.run(independence_test='chisq', alpha=fci_alpha)
         
         print(f"\n[FCI] Initial graph has {self.graph.number_of_edges()} edges")
+        self._print_fci_statistics()
         
         # Step 2: Extract ambiguous edges
         print("\n" + "=" * 60)
@@ -158,6 +164,32 @@ class HybridFCIZephyrPipeline:
         print(f"Kept as-is:               {len(ambiguous_edges) - resolved_count}")
         print(f"{'='*60}")
     
+    def _print_fci_statistics(self):
+        """Print detailed statistics of FCI PAG structure"""
+        print(f"\n{'='*60}")
+        print("FCI PAG STRUCTURE")
+        print(f"{'='*60}")
+        
+        # Count all edge types
+        directed = sum(1 for u, v, d in self.graph.edges(data=True) 
+                      if d.get('type') == 'directed')
+        bidirected = sum(1 for u, v, d in self.graph.edges(data=True) 
+                        if d.get('type') == 'bidirected')
+        partial = sum(1 for u, v, d in self.graph.edges(data=True) 
+                     if d.get('type') == 'partial')
+        undirected = sum(1 for u, v, d in self.graph.edges(data=True) 
+                        if d.get('type') == 'undirected')
+        tail_tail = sum(1 for u, v, d in self.graph.edges(data=True) 
+                       if d.get('type') == 'tail-tail')
+        
+        print(f"Edge Type Breakdown:")
+        print(f"  Directed (->):      {directed:3d}  [certain causal direction]")
+        print(f"  Bidirected (<->):   {bidirected:3d}  [latent confounder]")
+        print(f"  Partial (o->/-o):   {partial:3d}  [ambiguous direction]")
+        print(f"  Undirected (o-o):   {undirected:3d}  [completely ambiguous]")
+        print(f"  Tail-tail (--):     {tail_tail:3d}  [no clear direction]")
+        print(f"{'='*60}")
+    
     def _save_results(self):
         print(f"\n{'='*60}")
         print("Saving Results")
@@ -187,6 +219,8 @@ class HybridFCIZephyrPipeline:
 
 
 def main():
+    print_dataset_info()
+    
     hf_token = input("\nPlease enter your Hugging Face token: ").strip()
     
     if not hf_token:
@@ -194,14 +228,14 @@ def main():
         sys.exit(1)
     
     # Initialize pipeline
-    data_path = "../lucas0_train.csv"
-    pipeline = HybridFCIZephyrPipeline(data_path, hf_token, output_dir="../outputs")
+    data_loader = get_active_data_loader()
+    pipeline = HybridFCIZephyrPipeline(data_loader, hf_token)
     
     # Run pipeline
     pipeline.run(fci_alpha=0.05, validation_alpha=0.05)
     
     print("\n" + "=" * 60)
-    print("All done! Check the outputs/ directory for results.")
+    print(f"All done! Check {get_output_dir()}/ for results.")
     print("Compare with GPT-3.5 hybrid and pure approaches!")
     print("=" * 60 + "\n")
 

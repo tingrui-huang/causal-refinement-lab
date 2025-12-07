@@ -12,7 +12,12 @@ import os
 from datetime import datetime
 
 # Import modules from the modules package
-from modules.data_loader import LUCASDataLoader
+# Import config and utils
+from config import get_output_dir
+from utils import get_active_data_loader, print_dataset_info
+
+# Import modules from the modules package
+from modules.data_loader import DataLoader, LUCASDataLoader, ALARMDataLoader
 from modules.api_clients import GPT2Client
 from modules.scanners import MutualInformationScanner
 from modules.prompt_generators import DirectPromptGenerator
@@ -23,17 +28,17 @@ from modules.reporters import ReportGenerator
 
 
 class CausalDiscoveryPipeline:
-    def __init__(self, data_path, model_id="gpt2-large", output_dir="outputs"):
+    def __init__(self, data_loader, model_id="gpt2-large", output_dir=None):
         print("=" * 60)
         print("Initializing Causal Discovery Pipeline (GPT-2)")
         print("=" * 60)
 
-        self.output_dir = output_dir
+        self.output_dir = output_dir or get_output_dir()
         os.makedirs(self.output_dir, exist_ok=True)
         print(f"[OUTPUT] Results will be saved to: {self.output_dir}/")
 
         print("\n[1/8] Loading data...")
-        self.data_loader = LUCASDataLoader(data_path)
+        self.data_loader = data_loader
         self.df, self.nodes = self.data_loader.load_csv()
         self.graph = self.data_loader.create_empty_graph()
 
@@ -57,10 +62,10 @@ class CausalDiscoveryPipeline:
         print("[PARSER] Using robust multi-format parser")
 
         print("\n[7/8] Setting up visualizer...")
-        self.visualizer = GraphVisualizer(output_dir)
+        self.visualizer = GraphVisualizer(self.output_dir)
 
         print("\n[8/8] Setting up reporter...")
-        self.reporter = ReportGenerator(output_dir)
+        self.reporter = ReportGenerator(self.output_dir)
 
         self.validation_passed = 0
         self.validation_failed = 0
@@ -189,6 +194,8 @@ class CausalDiscoveryPipeline:
 
 
 def main():
+    print_dataset_info()
+    
     print("\n" + "=" * 60)
     print("Causal Discovery with GPT-2 (Local CPU)")
     print("=" * 60)
@@ -219,14 +226,14 @@ def main():
     max_steps = int(max_steps_input) if max_steps_input else 50
     
     # Initialize pipeline
-    data_path = "../lucas0_train.csv"
-    pipeline = CausalDiscoveryPipeline(data_path, model_id, output_dir="../outputs")
+    data_loader = get_active_data_loader()
+    pipeline = CausalDiscoveryPipeline(data_loader, model_id)
     
     # Run pipeline
     pipeline.run(max_steps=max_steps)
     
     print("\n" + "=" * 60)
-    print("All done! Check the outputs/ directory for results.")
+    print(f"All done! Check {get_output_dir()}/ for results.")
     print("Compare with GPT-3.5/Gemini to see model size impact!")
     print("=" * 60 + "\n")
 

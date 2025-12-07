@@ -6,35 +6,38 @@ import sys
 import os
 from datetime import datetime
 
+# Import config and utils
+from config import get_output_dir
+from utils import get_active_data_loader, print_dataset_info
+
 # Import modules from the modules package
-from modules.data_loader import LUCASDataLoader
 from modules.algorithms import GESAlgorithm
 from modules.visualizers import GraphVisualizer
 from modules.reporters import ReportGenerator
 
 
 class GESPipeline:
-    def __init__(self, data_path, output_dir="outputs"):
+    def __init__(self, data_loader, output_dir=None):
         print("=" * 60)
         print("Initializing GES Pipeline")
         print("=" * 60)
-
-        self.output_dir = output_dir
+        
+        self.output_dir = output_dir or get_output_dir()
         os.makedirs(self.output_dir, exist_ok=True)
         print(f"[OUTPUT] Results will be saved to: {self.output_dir}/")
 
         print("\n[1/4] Loading data...")
-        self.data_loader = LUCASDataLoader(data_path)
+        self.data_loader = data_loader
         self.df, self.nodes = self.data_loader.load_csv()
 
         print("\n[2/4] Setting up GES algorithm...")
         self.algorithm = GESAlgorithm(self.df, self.nodes)
 
         print("\n[3/4] Setting up visualizer...")
-        self.visualizer = GraphVisualizer(output_dir)
+        self.visualizer = GraphVisualizer(self.output_dir)
 
         print("\n[4/4] Setting up reporter...")
-        self.reporter = ReportGenerator(output_dir)
+        self.reporter = ReportGenerator(self.output_dir)
 
         self.model_name = "ges"
         self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -97,14 +100,16 @@ class GESPipeline:
 
 
 def main():
-    data_path = "../lucas0_train.csv"
-    pipeline = GESPipeline(data_path, output_dir="../outputs")
+    print_dataset_info()
+    
+    data_loader = get_active_data_loader()
+    pipeline = GESPipeline(data_loader)
 
     print("\nStarting GES algorithm...")
     pipeline.run(score_func='local_score_BIC')
     
     print("\n" + "=" * 60)
-    print("All done! Check the outputs/ directory for results.")
+    print(f"All done! Check {get_output_dir()}/ for results.")
     print("=" * 60 + "\n")
 
 

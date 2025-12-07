@@ -20,12 +20,50 @@ class ReportGenerator:
         filename = os.path.join(self.output_dir, 
                                f"report_{model_name.replace(' ', '_')}_{timestamp}.txt")
         
-        # Classify edges
+        # Classify edges with proper type notation
         accepted_edges = []
         rejected_edges = []
+        seen_pairs = set()  # To avoid duplicating bidirected/undirected edges
         
         for u, v, data in graph.edges(data=True):
-            edge_str = f"{u} -> {v}"
+            edge_type = data.get('type', 'directed')
+            
+            # Format edge based on type
+            if edge_type == 'bidirected':
+                # Bidirected edge: A <-> B (latent confounder)
+                # Only print once for each pair
+                pair = tuple(sorted([u, v]))
+                if pair in seen_pairs:
+                    continue
+                seen_pairs.add(pair)
+                edge_str = f"{u} <-> {v}"
+            elif edge_type == 'undirected':
+                # Undirected edge: A o-o B (completely ambiguous)
+                # Only print once for each pair
+                pair = tuple(sorted([u, v]))
+                if pair in seen_pairs:
+                    continue
+                seen_pairs.add(pair)
+                edge_str = f"{u} o-o {v}"
+            elif edge_type == 'tail-tail':
+                # Tail-tail edge: A -- B
+                # Only print once for each pair
+                pair = tuple(sorted([u, v]))
+                if pair in seen_pairs:
+                    continue
+                seen_pairs.add(pair)
+                edge_str = f"{u} -- {v}"
+            elif edge_type == 'partial':
+                # Partial edge: show subtype (o->, <-o, o-, -o)
+                subtype = data.get('subtype', 'o->')
+                edge_str = f"{u} {subtype} {v}"
+            elif edge_type == 'llm_resolved':
+                # LLM resolved edge: A -> B [LLM]
+                edge_str = f"{u} -> {v} [LLM]"
+            else:
+                # Directed edge: A -> B (from FCI or other methods)
+                edge_str = f"{u} -> {v}"
+            
             if data.get('type') == 'rejected':
                 rejected_edges.append(edge_str)
             else:
@@ -70,10 +108,12 @@ class ReportGenerator:
                                f"edges_{model_name.replace(' ', '_')}_{timestamp}.csv")
         
         with open(filename, "w", encoding='utf-8') as f:
-            f.write("source,target,status\n")
+            f.write("source,target,edge_type,status\n")
             for u, v, data in graph.edges(data=True):
-                status = "rejected" if data.get('type') == 'rejected' else "accepted"
-                f.write(f"{u},{v},{status}\n")
+                edge_type = data.get('type', 'directed')
+                status = "rejected" if edge_type == 'rejected' else "accepted"
+                # Include edge type in CSV for full transparency
+                f.write(f"{u},{v},{edge_type},{status}\n")
         
         print(f"[REPORT] Edge list saved to: {filename}")
         return filename
