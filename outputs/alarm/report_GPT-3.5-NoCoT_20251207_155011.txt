@@ -1,0 +1,68 @@
+============================================================
+Causal Discovery Report: GPT-3.5-NoCoT
+============================================================
+Generated: 2025-12-07 15:50:11
+Total Nodes: 37
+Total Iterations: 50
+============================================================
+
+ACCEPTED CAUSAL EDGES: 0
+------------------------------------------------------------
+  (No edges accepted)
+
+============================================================
+
+REJECTED EDGES: 50
+------------------------------------------------------------
+   1. [NO]  ARTCO2 -> MINVOL
+   2. [NO]  ARTCO2 -> PVSAT
+   3. [NO]  ARTCO2 -> SAO2
+   4. [NO]  ARTCO2 -> VENTALV
+   5. [NO]  ARTCO2 -> VENTLUNG
+   6. [NO]  ARTCO2 -> VENTTUBE
+   7. [NO]  CVP -> HYPOVOLEMIA
+   8. [NO]  CVP -> PCWP
+   9. [NO]  ERRCAUTER -> HREKG
+  10. [NO]  ERRCAUTER -> HRSAT
+  11. [NO]  EXPCO2 -> VENTLUNG
+  12. [NO]  HR -> CATECHOL
+  13. [NO]  HR -> CO
+  14. [NO]  HR -> HREKG
+  15. [NO]  HR -> HRSAT
+  16. [NO]  HRBP -> CATECHOL
+  17. [NO]  HRBP -> CO
+  18. [NO]  HRBP -> HR
+  19. [NO]  HRBP -> HREKG
+  20. [NO]  HRBP -> HRSAT
+  21. [NO]  HREKG -> CO
+  22. [NO]  HREKG -> HRSAT
+  23. [NO]  HRSAT -> CO
+  24. [NO]  LVEDVOLUME -> CVP
+  25. [NO]  LVEDVOLUME -> HYPOVOLEMIA
+  26. [NO]  LVEDVOLUME -> PCWP
+  27. [NO]  LVFAILURE -> HISTORY
+  28. [NO]  MINVOL -> PVSAT
+  29. [NO]  MINVOL -> SAO2
+  30. [NO]  MINVOL -> VENTALV
+  31. [NO]  MINVOL -> VENTTUBE
+  32. [NO]  MINVOLSET -> VENTMACH
+  33. [NO]  PCWP -> HYPOVOLEMIA
+  34. [NO]  PRESS -> VENTTUBE
+  35. [NO]  PVSAT -> SAO2
+  36. [NO]  PVSAT -> VENTALV
+  37. [NO]  PVSAT -> VENTTUBE
+  38. [NO]  SAO2 -> VENTTUBE
+  39. [NO]  STROKEVOLUME -> CO
+  40. [NO]  TPR -> BP
+  41. [NO]  VENTALV -> SAO2
+  42. [NO]  VENTALV -> VENTTUBE
+  43. [NO]  VENTLUNG -> MINVOL
+  44. [NO]  VENTLUNG -> PVSAT
+  45. [NO]  VENTLUNG -> SAO2
+  46. [NO]  VENTLUNG -> VENTALV
+  47. [NO]  VENTLUNG -> VENTTUBE
+  48. [NO]  VENTTUBE -> DISCONNECT
+  49. [NO]  VENTTUBE -> MINVOLSET
+  50. [NO]  VENTTUBE -> VENTMACH
+
+============================================================

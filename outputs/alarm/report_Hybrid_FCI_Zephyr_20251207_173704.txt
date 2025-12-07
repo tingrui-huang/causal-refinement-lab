@@ -1,0 +1,61 @@
+============================================================
+Causal Discovery Report: Hybrid_FCI_Zephyr
+============================================================
+Generated: 2025-12-07 17:37:04
+Total Nodes: 37
+Total Iterations: 19
+============================================================
+
+ACCEPTED CAUSAL EDGES: 43
+------------------------------------------------------------
+   1. [YES] ARTCO2 -> CATECHOL
+   2. [YES] ARTCO2 -> EXPCO2
+   3. [YES] CATECHOL -> HR
+   4. [YES] CO -> BP
+   5. [YES] ERRCAUTER -> HRSAT [LLM]
+   6. [YES] ERRCAUTER o- HREKG
+   7. [YES] ERRLOWOUTPUT -> HRBP [LLM]
+   8. [YES] FIO2 o- PVSAT
+   9. [YES] HISTORY -> LVFAILURE [LLM]
+  10. [YES] HR -> CO
+  11. [YES] HR -> HRBP
+  12. [YES] HR -> HREKG
+  13. [YES] HR -> HRSAT
+  14. [YES] HYPOVOLEMIA -> STROKEVOLUME [LLM]
+  15. [YES] INTUBATION -> MINVOL
+  16. [YES] INTUBATION -> VENTALV
+  17. [YES] LVEDVOLUME -> CVP
+  18. [YES] LVEDVOLUME -> HYPOVOLEMIA [LLM]
+  19. [YES] LVEDVOLUME -> PCWP
+  20. [YES] LVFAILURE o- LVEDVOLUME
+  21. [YES] LVFAILURE o- STROKEVOLUME
+  22. [YES] MINVOL -> PRESS
+  23. [YES] MINVOLSET o-o VENTMACH
+  24. [YES] PAP -> PULMEMBOLUS [LLM]
+  25. [YES] PRESS -> KINKEDTUBE [LLM]
+  26. [YES] PVSAT -> SAO2
+  27. [YES] SHUNT -> INTUBATION [LLM]
+  28. [YES] SHUNT -> PULMEMBOLUS [LLM]
+  29. [YES] SHUNT -> SAO2
+  30. [YES] STROKEVOLUME -> CO
+  31. [YES] TPR -> ANAPHYLAXIS [LLM]
+  32. [YES] TPR -> BP
+  33. [YES] TPR -> CATECHOL [LLM]
+  34. [YES] VENTALV -> ARTCO2
+  35. [YES] VENTALV -> PVSAT
+  36. [YES] VENTLUNG -> EXPCO2
+  37. [YES] VENTLUNG -> INTUBATION [LLM]
+  38. [YES] VENTLUNG -> MINVOL
+  39. [YES] VENTLUNG -> VENTALV
+  40. [YES] VENTTUBE -> PRESS
+  41. [YES] VENTTUBE -> VENTLUNG
+  42. [YES] VENTTUBE -o DISCONNECT
+  43. [YES] VENTTUBE -o VENTMACH
+
+============================================================
+
+REJECTED EDGES: 0
+------------------------------------------------------------
+  (No edges rejected)
+
+============================================================
