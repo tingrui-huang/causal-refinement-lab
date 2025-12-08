@@ -297,8 +297,8 @@ See:
 - `README.md` - Project overview
 
 
-| **Model**   | **Scale** | **Behavior**        | **Resolution Rate** | **Orientation Accuracy (The Real Test)** |
-|-------------|-----------|---------------------|----------------------|-------------------------------------------|
-| GPT-3.5     | >175B     | Prudent (Cautious)  | 71%                 | 60% (Effective)                           |
-| Zephyr-7B   | 7B        | Reckless (Hallucinating) | 86%           | 33% (Destructive)                         |
+| **Model**   | **Scale** | **Dataset** | **Resolved Edges (Count)** | **Orientation Accuracy** |
+|-------------|-----------|-------------|----------------------------|------------------------------------------|
+| GPT-3.5     | >175B     | alarm       | 15/24                      | 60%                          |
+| Zephyr-7B   | 7B        | alarm       | 18/24                      | 33%                        |
 
