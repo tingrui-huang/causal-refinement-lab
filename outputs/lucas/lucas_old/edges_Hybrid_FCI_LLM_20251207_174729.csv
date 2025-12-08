@@ -1,0 +1,14 @@
+source,target,edge_type,status
+Smoking,Yellow_Fingers,directed,accepted
+Smoking,Anxiety,partial,accepted
+Smoking,Peer_Pressure,partial,accepted
+Smoking,Lung_cancer,directed,accepted
+Genetics,Attention_Disorder,undirected,accepted
+Genetics,Lung_cancer,llm_resolved,accepted
+Attention_Disorder,Genetics,undirected,accepted
+Attention_Disorder,Car_Accident,directed,accepted
+Fatigue,Car_Accident,directed,accepted
+Allergy,Coughing,llm_resolved,accepted
+Coughing,Fatigue,directed,accepted
+Lung_cancer,Fatigue,directed,accepted
+Lung_cancer,Coughing,directed,accepted

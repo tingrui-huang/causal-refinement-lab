@@ -1,0 +1,30 @@
+============================================================
+Causal Discovery Report: Hybrid_FCI_LLM
+============================================================
+Generated: 2025-12-07 22:50:57
+Total Nodes: 12
+Total Iterations: 5
+============================================================
+
+ACCEPTED CAUSAL EDGES: 12
+------------------------------------------------------------
+   1. [YES] Allergy o- Coughing
+   2. [YES] Attention_Disorder -> Car_Accident
+   3. [YES] Coughing -> Fatigue
+   4. [YES] Fatigue -> Car_Accident
+   5. [YES] Genetics -> Attention_Disorder [LLM]
+   6. [YES] Genetics -> Lung_cancer [LLM]
+   7. [YES] Lung_cancer -> Coughing
+   8. [YES] Lung_cancer -> Fatigue
+   9. [YES] Peer_Pressure -> Smoking [LLM]
+  10. [YES] Smoking -> Lung_cancer
+  11. [YES] Smoking -> Yellow_Fingers
+  12. [YES] Smoking -o Anxiety
+
+============================================================
+
+REJECTED EDGES: 0
+------------------------------------------------------------
+  (No edges rejected)
+
+============================================================
