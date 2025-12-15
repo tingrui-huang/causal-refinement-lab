@@ -16,24 +16,46 @@ class MaskedAdjacencyMatrix(nn.Module):
     
     The mask determines which edges are allowed to be learned.
     Masked positions are always zero and not trainable.
+    
+    v2 IMPROVEMENT (Gemini's insight):
+    - Supports custom init_weights to incorporate LLM priors
+    - If init_weights provided, uses it as soft prior
+    - Otherwise falls back to random initialization
     """
     
-    def __init__(self, n_vars: int, mask: np.ndarray, init_value: float = 0.1):
+    def __init__(
+        self, 
+        n_vars: int, 
+        mask: np.ndarray, 
+        init_value: float = 0.1,
+        init_weights: Optional[np.ndarray] = None
+    ):
         """
         Initialize masked adjacency matrix.
         
         Args:
             n_vars: Number of variables
             mask: Binary mask matrix (1 = trainable, 0 = forbidden)
-            init_value: Initial value for trainable weights
+            init_value: Initial value for random weights (if init_weights not provided)
+            init_weights: Optional custom initialization (e.g., from LLM prior)
+                         If provided, this takes precedence over random init
         """
         super().__init__()
         
         self.n_vars = n_vars
         self.mask = torch.FloatTensor(mask)
         
-        # Initialize weights with small random values
-        weights = torch.randn(n_vars, n_vars) * init_value
+        # Initialize weights
+        if init_weights is not None:
+            # Use custom initialization (e.g., LLM prior)
+            weights = torch.FloatTensor(init_weights)
+            print(f"[NeuralLP] Using custom init_weights (LLM prior)")
+            print(f"  Non-zero weights: {(weights != 0).sum().item()}")
+            print(f"  Max weight: {weights.max().item():.4f}")
+        else:
+            # Use random initialization
+            weights = torch.randn(n_vars, n_vars) * init_value
+            print(f"[NeuralLP] Using random initialization (init_value={init_value})")
         
         # Apply mask: only trainable positions get non-zero values
         weights = weights * self.mask
@@ -114,6 +136,9 @@ class NeuralLP(nn.Module):
     
     Combines masked adjacency matrix with multi-hop reasoning
     to learn causal structures from data.
+    
+    v2 IMPROVEMENT:
+    - Supports init_weights parameter for LLM prior initialization
     """
     
     def __init__(
@@ -121,7 +146,8 @@ class NeuralLP(nn.Module):
         n_vars: int, 
         mask: np.ndarray, 
         max_hops: int = 2,
-        init_value: float = 0.1
+        init_value: float = 0.1,
+        init_weights: Optional[np.ndarray] = None
     ):
         """
         Initialize Neural LP model.
@@ -130,7 +156,8 @@ class NeuralLP(nn.Module):
             n_vars: Number of variables
             mask: Binary mask matrix for allowed edges
             max_hops: Maximum path length for reasoning
-            init_value: Initial value for weights
+            init_value: Initial value for random weights
+            init_weights: Optional custom initialization (LLM prior)
         """
         super().__init__()
         
@@ -138,7 +165,9 @@ class NeuralLP(nn.Module):
         self.max_hops = max_hops
         
         # Learnable adjacency matrix (Operator)
-        self.adjacency = MaskedAdjacencyMatrix(n_vars, mask, init_value)
+        self.adjacency = MaskedAdjacencyMatrix(
+            n_vars, mask, init_value, init_weights=init_weights
+        )
         
         # Multi-hop reasoning (Controller)
         self.reasoning = MultiHopReasoning(self.adjacency, max_hops)
