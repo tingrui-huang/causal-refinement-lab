@@ -71,8 +71,8 @@ class MaskedAdjacencyMatrix(nn.Module):
             Adjacency matrix with mask applied
         """
         # Apply mask to ensure forbidden edges stay zero
-        return self.weights * self.mask
-    
+        return self.weights * self.mask    # 防御性编程所以是第二次乘mask
+
     def get_adjacency(self) -> torch.Tensor:
         """
         Get the current adjacency matrix (alias for forward).
