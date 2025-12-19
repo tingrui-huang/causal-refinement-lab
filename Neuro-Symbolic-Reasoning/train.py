@@ -1,0 +1,366 @@
+"""
+Main Training Script
+
+Simply run this script to train with the settings in config.py
+To change dataset or LLM, edit config.py
+"""
+
+import time
+import torch
+import torch.optim as optim
+from datetime import datetime
+
+# Import configuration
+import config
+
+# Import modules
+from modules.data_loader import CausalDataLoader
+from modules.prior_builder import PriorBuilder
+from modules.model import CausalDiscoveryModel
+from modules.loss import LossComputer
+from modules.evaluator import CausalGraphEvaluator
+from modules.result_manager import ResultManager
+from modules.metrics import compute_bidirectional_ratio, compute_sparsity_metrics
+
+
+def main():
+    """Main training function"""
+    
+    # ========================================================================
+    # PRINT CONFIGURATION
+    # ========================================================================
+    config.print_config()
+    
+    # Validate configuration
+    try:
+        config.validate_config()
+    except (ValueError, FileNotFoundError) as e:
+        print(f"\n[ERROR] Configuration Error: {e}")
+        print("\nPlease fix the configuration in config.py and try again.")
+        return
+    
+    print()
+    
+    # Get config dict
+    cfg = config.get_config()
+    
+    # ========================================================================
+    # INITIALIZE TIMING
+    # ========================================================================
+    timing = {
+        'total_start': time.time(),
+        'data_loading': 0,
+        'prior_building': 0,
+        'model_init': 0,
+        'training': 0,
+        'evaluation': 0,
+        'saving': 0
+    }
+    
+    # Initialize result manager
+    result_manager = ResultManager(base_dir=cfg['results_dir'])
+    
+    # ========================================================================
+    # DATA LOADING
+    # ========================================================================
+    print("=" * 80)
+    print("STEP 1: LOADING DATA")
+    print("=" * 80)
+    t_start = time.time()
+    
+    data_loader = CausalDataLoader(
+        data_path=cfg['data_path'],
+        metadata_path=cfg['metadata_path']
+    )
+    
+    data = data_loader.load_data()
+    var_structure = data_loader.get_variable_structure()
+    
+    timing['data_loading'] = time.time() - t_start
+    print(f"\n[OK] Data loaded in {timing['data_loading']:.2f}s")
+    print()
+    
+    # ========================================================================
+    # PRIOR BUILDING
+    # ========================================================================
+    print("=" * 80)
+    print("STEP 2: BUILDING PRIORS")
+    print("=" * 80)
+    t_start = time.time()
+    
+    prior_builder = PriorBuilder(
+        var_structure=var_structure,
+        dataset_name=cfg['dataset_name']
+    )
+    
+    priors = prior_builder.get_all_priors(
+        fci_skeleton_path=cfg['fci_skeleton_path'],
+        llm_direction_path=cfg['llm_direction_path'],
+        use_llm_prior=cfg['use_llm_prior']
+    )
+    
+    timing['prior_building'] = time.time() - t_start
+    print(f"\n[OK] Priors built in {timing['prior_building']:.2f}s")
+    print()
+    
+    # ========================================================================
+    # MODEL INITIALIZATION
+    # ========================================================================
+    print("=" * 80)
+    print("STEP 3: INITIALIZING MODEL")
+    print("=" * 80)
+    t_start = time.time()
+    
+    model = CausalDiscoveryModel(
+        n_states=var_structure['n_states'],
+        skeleton_mask=priors['skeleton_mask'],
+        direction_prior=priors['direction_prior']
+    )
+    
+    loss_computer = LossComputer(
+        block_structure=priors['blocks'],
+        penalty_weights=priors['penalty_weights']
+    )
+    
+    optimizer = optim.Adam(
+        model.parameters(),
+        lr=cfg['learning_rate']
+    )
+    
+    timing['model_init'] = time.time() - t_start
+    print(f"[OK] Model initialized in {timing['model_init']:.2f}s")
+    print()
+    
+    # ========================================================================
+    # TRAINING
+    # ========================================================================
+    print("=" * 80)
+    print("STEP 4: TRAINING")
+    print("=" * 80)
+    print()
+    
+    t_start = time.time()
+    n_epochs = cfg['n_epochs']
+    log_interval = cfg['log_interval']
+    
+    # Initialize history tracking
+    history = {
+        'epoch': [],
+        'loss_total': [],
+        'loss_reconstruction': [],
+        'loss_group_lasso': [],
+        'loss_cycle': [],
+        'bidirectional_ratio': [],
+        'bidirectional_count': [],
+        'unidirectional_count': [],
+        'overall_sparsity': [],
+        'active_connections': [],
+        'active_blocks': [],
+        'block_sparsity': []
+    }
+    
+    for epoch in range(n_epochs):
+        optimizer.zero_grad()
+        
+        # Forward pass
+        logits = model(data, n_hops=cfg['n_hops'])
+        
+        # Compute loss
+        adjacency = model.get_adjacency()
+        loss_dict = loss_computer.compute_total_loss(
+            predictions=logits,
+            targets=data,
+            adjacency=adjacency,
+            lambda_group=cfg['lambda_group_lasso'],
+            lambda_cycle=cfg['lambda_cycle']
+        )
+        loss = loss_dict['total']
+        
+        # Backward pass
+        loss.backward()
+        optimizer.step()
+        
+        # Clamp weights to prevent explosion
+        with torch.no_grad():
+            model.raw_adj.data.clamp_(-5.0, 5.0)
+        
+        # Compute monitoring metrics
+        if (epoch + 1) % log_interval == 0 or epoch == 0:
+            with torch.no_grad():
+                # Bidirectional ratio (key metric for direction learning)
+                bidir_stats = compute_bidirectional_ratio(
+                    adjacency, 
+                    priors['blocks'],
+                    threshold=cfg['threshold']
+                )
+                
+                # Sparsity metrics
+                sparsity_stats = compute_sparsity_metrics(
+                    adjacency,
+                    priors['skeleton_mask'],
+                    priors['blocks'],
+                    threshold=cfg['threshold']
+                )
+                
+                # Record history
+                history['epoch'].append(epoch + 1)
+                history['loss_total'].append(loss.item())
+                history['loss_reconstruction'].append(loss_dict['reconstruction'].item())
+                history['loss_group_lasso'].append(loss_dict['weighted_group_lasso'].item())
+                history['loss_cycle'].append(loss_dict['cycle_consistency'].item())
+                history['bidirectional_ratio'].append(bidir_stats['bidirectional_ratio'])
+                history['bidirectional_count'].append(bidir_stats['bidirectional'])
+                history['unidirectional_count'].append(bidir_stats['unidirectional'])
+                history['overall_sparsity'].append(sparsity_stats['overall_sparsity'])
+                history['active_connections'].append(sparsity_stats['active_connections'])
+                history['active_blocks'].append(sparsity_stats['active_blocks'])
+                history['block_sparsity'].append(sparsity_stats['block_sparsity'])
+                
+                # Print comprehensive log
+                print(f"\nEpoch {epoch+1:3d}/{n_epochs}")
+                print(f"  Loss: {loss.item():.4f} "
+                      f"(Recon: {loss_dict['reconstruction'].item():.4f}, "
+                      f"Lasso: {loss_dict['weighted_group_lasso'].item():.4f}, "
+                      f"Cycle: {loss_dict['cycle_consistency'].item():.4f})")
+                print(f"  Direction: Bidir {bidir_stats['bidirectional_ratio']*100:.1f}% "
+                      f"({bidir_stats['bidirectional']}/{bidir_stats['total_pairs']} pairs)")
+                print(f"  Sparsity: Overall {sparsity_stats['overall_sparsity']*100:.1f}%, "
+                      f"Block {sparsity_stats['block_sparsity']*100:.1f}% "
+                      f"({sparsity_stats['active_blocks']}/{sparsity_stats['total_blocks']} active)")
+    
+    timing['training'] = time.time() - t_start
+    print(f"\n[OK] Training completed in {timing['training']:.2f}s")
+    print(f"  Average: {timing['training']/n_epochs:.3f}s per epoch")
+    
+    # Print training summary
+    if len(history['bidirectional_ratio']) > 0:
+        print("\n" + "=" * 80)
+        print("TRAINING SUMMARY")
+        print("=" * 80)
+        print(f"\nDirection Learning:")
+        print(f"  Bidirectional Ratio: {history['bidirectional_ratio'][0]*100:.1f}% -> {history['bidirectional_ratio'][-1]*100:.1f}%")
+        change = (history['bidirectional_ratio'][-1] - history['bidirectional_ratio'][0]) * 100
+        status = '[GOOD]' if change < 0 else '[NEEDS TUNING]'
+        print(f"  Change: {change:+.1f}% {status}")
+        
+        print(f"\nSparsity Evolution:")
+        print(f"  Overall: {history['overall_sparsity'][0]*100:.1f}% -> {history['overall_sparsity'][-1]*100:.1f}%")
+        print(f"  Active Connections: {history['active_connections'][0]} -> {history['active_connections'][-1]}")
+        print(f"  Active Blocks: {history['active_blocks'][0]}/{history['active_blocks'][0]} -> {history['active_blocks'][-1]}/{len(priors['blocks'])}")
+        print("=" * 80)
+    print()
+    
+    # ========================================================================
+    # EVALUATION
+    # ========================================================================
+    print("=" * 80)
+    print("STEP 5: EVALUATION")
+    print("=" * 80)
+    print()
+    
+    t_start = time.time()
+    
+    if cfg['ground_truth_path']:
+        evaluator = CausalGraphEvaluator(
+            ground_truth_path=cfg['ground_truth_path'],
+            var_structure=var_structure
+        )
+        
+        # Extract learned edges
+        adjacency = model.get_adjacency()
+        learned_edges = evaluator.extract_learned_edges(
+            adjacency,
+            threshold=cfg['threshold']
+        )
+        
+        # Evaluate
+        metrics = evaluator.evaluate(learned_edges)
+        evaluator.print_metrics(metrics)
+    else:
+        print("[WARN] No ground truth available for this dataset")
+        print("  Skipping evaluation...")
+        metrics = {}
+        learned_edges = set()
+        adjacency = model.get_adjacency()
+    
+    timing['evaluation'] = time.time() - t_start
+    print(f"\n[OK] Evaluation completed in {timing['evaluation']:.2f}s")
+    print()
+    
+    # ========================================================================
+    # SAVE RESULTS
+    # ========================================================================
+    print("=" * 80)
+    print("STEP 6: SAVING RESULTS")
+    print("=" * 80)
+    print()
+    
+    t_start = time.time()
+    
+    # Create run directory
+    run_dir = result_manager.create_run_directory(
+        dataset_name=cfg['dataset_name'],
+        llm_model=config.get_llm_short_name(),
+        config=cfg
+    )
+    
+    print(f"Run directory: {run_dir}")
+    print()
+    
+    # Save model and adjacency
+    result_manager.save_model(model, run_dir)
+    result_manager.save_adjacency(adjacency, run_dir)
+    result_manager.save_config(cfg, run_dir)
+    result_manager.save_history(history, run_dir)
+    
+    # Calculate total time
+    timing['saving'] = time.time() - t_start
+    timing['total'] = time.time() - timing['total_start']
+    
+    # Save evaluation results with timing
+    if cfg['ground_truth_path']:
+        evaluator.save_results(
+            metrics=metrics,
+            learned_edges=learned_edges,
+            output_dir=str(run_dir),
+            config=cfg,
+            timing_info=timing
+        )
+    
+    print(f"\n[OK] Results saved in {timing['saving']:.2f}s")
+    print()
+    
+    # ========================================================================
+    # SUMMARY
+    # ========================================================================
+    print("=" * 80)
+    print("TRAINING COMPLETE!")
+    print("=" * 80)
+    print()
+    print(f"Total time:       {timing['total']:.2f}s ({timing['total']/60:.1f} min)")
+    print(f"  Data loading:   {timing['data_loading']:.2f}s ({timing['data_loading']/timing['total']*100:.1f}%)")
+    print(f"  Prior building: {timing['prior_building']:.2f}s ({timing['prior_building']/timing['total']*100:.1f}%)")
+    print(f"  Model init:     {timing['model_init']:.2f}s ({timing['model_init']/timing['total']*100:.1f}%)")
+    print(f"  Training:       {timing['training']:.2f}s ({timing['training']/timing['total']*100:.1f}%)")
+    print(f"  Evaluation:     {timing['evaluation']:.2f}s ({timing['evaluation']/timing['total']*100:.1f}%)")
+    print(f"  Saving:         {timing['saving']:.2f}s ({timing['saving']/timing['total']*100:.1f}%)")
+    print()
+    
+    if metrics:
+        print(f"Edge F1:          {metrics['edge_f1']:.1%}")
+        print(f"Orient. Accuracy: {metrics['orientation_accuracy']:.1%}")
+        print(f"SHD:              {metrics['shd']}")
+        print()
+    
+    print(f"Results saved to: {run_dir}")
+    print("=" * 80)
+    
+    return {
+        'metrics': metrics,
+        'timing': timing,
+        'run_dir': run_dir
+    }
+
+
+if __name__ == "__main__":
+    results = main()

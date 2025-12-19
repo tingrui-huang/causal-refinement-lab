@@ -1,12 +1,16 @@
 """
 Evaluator Module
 
-Evaluate learned causal graph against ground truth
+Evaluate learned causal graph against ground truth with comprehensive metrics
+and metadata tracking.
 """
 
 import re
 import torch
-from typing import Dict, Set, Tuple
+import json
+import time
+from datetime import datetime
+from typing import Dict, Set, Tuple, Optional
 from pathlib import Path
 
 
@@ -238,6 +242,145 @@ class CausalGraphEvaluator:
         print("\n--- SUMMARY ---")
         print(f"Learned Edges:      {metrics['learned_edges']}")
         print(f"Ground Truth Edges: {metrics['ground_truth_edges']}")
+    
+    def save_results(self, 
+                     metrics: Dict, 
+                     learned_edges: Set[Tuple[str, str]],
+                     output_dir: str,
+                     config: Dict,
+                     timing_info: Optional[Dict] = None):
+        """
+        Save evaluation results with comprehensive metadata
+        
+        Args:
+            metrics: Evaluation metrics dictionary
+            learned_edges: Set of learned edges
+            output_dir: Directory to save results
+            config: Training configuration with metadata
+            timing_info: Dictionary with timing information (optional)
+        """
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+        
+        # Prepare comprehensive results
+        results = {
+            # Metadata
+            'metadata': {
+                'dataset': config.get('dataset_name', 'Unknown'),
+                'llm_model': config.get('llm_model', 'None'),
+                'use_llm_prior': config.get('use_llm_prior', False),
+                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'run_id': config.get('run_id', datetime.now().strftime('%Y%m%d_%H%M%S'))
+            },
+            
+            # Configuration
+            'config': {
+                'learning_rate': config.get('learning_rate', None),
+                'lambda_group_lasso': config.get('lambda_group_lasso', None),
+                'lambda_cycle': config.get('lambda_cycle', None),
+                'n_epochs': config.get('n_epochs', None),
+                'threshold': config.get('threshold', 0.3),
+                'fci_skeleton_path': config.get('fci_skeleton_path', None),
+                'llm_direction_path': config.get('llm_direction_path', None)
+            },
+            
+            # Timing information
+            'timing': timing_info or {},
+            
+            # Metrics
+            'metrics': metrics,
+            
+            # Learned edges
+            'learned_edges': [{'source': e[0], 'target': e[1]} for e in sorted(learned_edges)],
+            
+            # Ground truth edges
+            'ground_truth_edges': [{'source': e[0], 'target': e[1]} for e in sorted(self.ground_truth_edges)]
+        }
+        
+        # Save as JSON
+        json_path = output_path / 'evaluation_results.json'
+        with open(json_path, 'w') as f:
+            json.dump(results, f, indent=2)
+        
+        # Save as human-readable text
+        txt_path = output_path / 'evaluation_results.txt'
+        with open(txt_path, 'w', encoding='utf-8') as f:
+            f.write("=" * 80 + "\n")
+            f.write("CAUSAL DISCOVERY EVALUATION RESULTS\n")
+            f.write("=" * 80 + "\n\n")
+            
+            # Metadata
+            f.write("METADATA\n")
+            f.write("-" * 80 + "\n")
+            f.write(f"Dataset:        {results['metadata']['dataset']}\n")
+            f.write(f"LLM Model:      {results['metadata']['llm_model']}\n")
+            f.write(f"Use LLM Prior:  {results['metadata']['use_llm_prior']}\n")
+            f.write(f"Timestamp:      {results['metadata']['timestamp']}\n")
+            f.write(f"Run ID:         {results['metadata']['run_id']}\n\n")
+            
+            # Configuration
+            f.write("CONFIGURATION\n")
+            f.write("-" * 80 + "\n")
+            for key, value in results['config'].items():
+                if value is not None:
+                    f.write(f"{key:25s}: {value}\n")
+            f.write("\n")
+            
+            # Timing
+            if timing_info:
+                f.write("TIMING INFORMATION\n")
+                f.write("-" * 80 + "\n")
+                for key, value in timing_info.items():
+                    if isinstance(value, float):
+                        f.write(f"{key:25s}: {value:.2f} seconds\n")
+                    else:
+                        f.write(f"{key:25s}: {value}\n")
+                f.write("\n")
+            
+            # Metrics
+            f.write("EVALUATION METRICS\n")
+            f.write("-" * 80 + "\n\n")
+            
+            f.write("Edge-Level (Undirected Skeleton)\n")
+            f.write(f"  Precision:      {metrics['edge_precision']:.1%}\n")
+            f.write(f"  Recall:         {metrics['edge_recall']:.1%}\n")
+            f.write(f"  F1 Score:       {metrics['edge_f1']:.1%}\n")
+            f.write(f"  True Positives: {metrics['undirected_tp']}\n")
+            f.write(f"  False Positives:{metrics['undirected_fp']}\n")
+            f.write(f"  False Negatives:{metrics['undirected_fn']}\n\n")
+            
+            f.write("Directed Edge-Level\n")
+            f.write(f"  Precision:      {metrics['directed_precision']:.1%}\n")
+            f.write(f"  Recall:         {metrics['directed_recall']:.1%}\n")
+            f.write(f"  F1 Score:       {metrics['directed_f1']:.1%}\n")
+            f.write(f"  True Positives: {metrics['directed_tp']}\n")
+            f.write(f"  False Positives:{metrics['directed_fp']}\n")
+            f.write(f"  False Negatives:{metrics['directed_fn']}\n\n")
+            
+            f.write("Orientation Accuracy\n")
+            f.write(f"  Accuracy:       {metrics['orientation_accuracy']:.1%}\n")
+            f.write(f"  Correct:        {metrics['correctly_oriented']}\n")
+            f.write(f"  Incorrect:      {metrics['incorrectly_oriented']}\n\n")
+            
+            f.write("Structural Hamming Distance\n")
+            f.write(f"  SHD:            {metrics['shd']}\n")
+            f.write(f"  Reversals:      {metrics['reversals']}\n\n")
+            
+            f.write("Summary\n")
+            f.write(f"  Learned Edges:  {metrics['learned_edges']}\n")
+            f.write(f"  GT Edges:       {metrics['ground_truth_edges']}\n\n")
+            
+            # Learned edges
+            f.write("=" * 80 + "\n")
+            f.write("LEARNED EDGES\n")
+            f.write("=" * 80 + "\n")
+            for edge in sorted(learned_edges):
+                status = "✓" if edge in self.ground_truth_edges else ("↔" if (edge[1], edge[0]) in self.ground_truth_edges else "✗")
+                f.write(f"{status} {edge[0]:20s} → {edge[1]:20s}\n")
+        
+        print(f"\nResults saved to:")
+        print(f"  JSON: {json_path}")
+        print(f"  TXT:  {txt_path}")
 
 
 if __name__ == "__main__":
