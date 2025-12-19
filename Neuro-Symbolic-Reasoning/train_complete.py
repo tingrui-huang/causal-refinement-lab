@@ -33,6 +33,11 @@ def compute_bidirectional_ratio(adjacency: torch.Tensor,
     Goal: Track how many block pairs have strong weights in BOTH directions
     We want this ratio to DECREASE during training (direction learning)
     
+    FIXED: Now checks ALL variable pairs in FCI skeleton, not just those
+    with both directions in block_structure. For pairs with only one direction
+    in block_structure, we still check the reverse direction in the adjacency
+    matrix (even though it's not explicitly in block_structure).
+    
     Args:
         adjacency: (105, 105) adjacency matrix
         block_structure: List of blocks
@@ -52,26 +57,48 @@ def compute_bidirectional_ratio(adjacency: torch.Tensor,
         var_a, var_b = block['var_pair']
         block_lookup[(var_a, var_b)] = block
     
+    # Get all unique variable pairs from block_structure
+    all_pairs = set()
     for block in block_structure:
         var_a, var_b = block['var_pair']
-        
-        # Avoid double counting
         pair_key = tuple(sorted([var_a, var_b]))
-        if pair_key in processed_pairs:
-            continue
-        processed_pairs.add(pair_key)
+        all_pairs.add(pair_key)
+    
+    # Check each unique pair
+    for pair_key in all_pairs:
+        var_a, var_b = pair_key  # Already sorted
         
-        # Find reverse block
+        # Try to get both directions
+        forward_block = block_lookup.get((var_a, var_b))
         reverse_block = block_lookup.get((var_b, var_a))
-        if reverse_block is None:
-            continue
         
-        # Compute block strengths
-        forward_weights = adjacency[block['row_indices']][:, block['col_indices']]
-        backward_weights = adjacency[reverse_block['row_indices']][:, reverse_block['col_indices']]
+        # Compute strengths for both directions
+        # If a direction is not in block_structure, manually compute from adjacency
+        if forward_block is not None:
+            forward_weights = adjacency[forward_block['row_indices']][:, forward_block['col_indices']]
+            forward_strength = forward_weights.mean().item()
+        else:
+            # Manually compute: need to get state indices from reverse_block
+            if reverse_block is not None:
+                # Swap indices: reverse_block is (var_b, var_a), we want (var_a, var_b)
+                forward_weights = adjacency[reverse_block['col_indices']][:, reverse_block['row_indices']]
+                forward_strength = forward_weights.mean().item()
+            else:
+                # Should not happen if block_structure is correct
+                forward_strength = 0.0
         
-        forward_strength = forward_weights.mean().item()
-        backward_strength = backward_weights.mean().item()
+        if reverse_block is not None:
+            backward_weights = adjacency[reverse_block['row_indices']][:, reverse_block['col_indices']]
+            backward_strength = backward_weights.mean().item()
+        else:
+            # Manually compute: need to get state indices from forward_block
+            if forward_block is not None:
+                # Swap indices: forward_block is (var_a, var_b), we want (var_b, var_a)
+                backward_weights = adjacency[forward_block['col_indices']][:, forward_block['row_indices']]
+                backward_strength = backward_weights.mean().item()
+            else:
+                # Should not happen if block_structure is correct
+                backward_strength = 0.0
         
         # Classify
         forward_strong = forward_strength > threshold
@@ -171,7 +198,8 @@ def train_complete(config: dict):
     
     # === 2. BUILD PRIORS ===
     print("\n[2/6] Building Priors...")
-    prior_builder = PriorBuilder(var_structure)
+    dataset_name = data_loader.metadata.get('dataset_name', 'Unknown')
+    prior_builder = PriorBuilder(var_structure, dataset_name=dataset_name)
     priors = prior_builder.get_all_priors(
         fci_skeleton_path=config['fci_skeleton_path'],  # Pure FCI for hard mask
         llm_direction_path=config.get('llm_direction_path'),  # FCI+LLM for soft direction (optional)
@@ -392,12 +420,12 @@ def train_complete(config: dict):
 if __name__ == "__main__":
     # Configuration
     config = {
-        # Data paths
-        'data_path': 'data/alarm_data_10000.csv',
-        'metadata_path': 'output/knowledge_graph_metadata.json',
-        'fci_skeleton_path': 'data/edges_FCI_20251207_230824.csv',  # Pure FCI for HARD skeleton mask
-        'llm_direction_path': 'data/edges_Hybrid_FCI_LLM_20251207_230956.csv',  # FCI+LLM for SOFT direction prior
-        'ground_truth_path': 'data/alarm.bif',
+        # Data paths (updated to new structure)
+        'data_path': 'data/alarm/alarm_data_10000.csv',
+        'metadata_path': 'data/alarm/metadata.json',
+        'fci_skeleton_path': 'data/alarm/edges_FCI_20251207_230824.csv',  # Pure FCI for HARD skeleton mask
+        'llm_direction_path': 'data/alarm/edges_Hybrid_FCI_LLM_20251207_230956.csv',  # FCI+LLM for SOFT direction prior
+        'ground_truth_path': 'data/alarm/alarm.bif',
         
         # Training parameters
         'n_epochs': 200,  # Pilot training: 200 epochs

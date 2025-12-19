@@ -132,7 +132,7 @@ def main():
     
     # Paths
     adjacency_path = 'results/complete/complete_adjacency.pt'
-    metadata_path = 'output/knowledge_graph_metadata.json'
+    metadata_path = 'old_version/output/knowledge_graph_metadata.json'
     ground_truth_path = 'data/alarm.bif'
     llm_prior_path = 'data/edges_Hybrid_FCI_LLM_20251207_230956.csv'
     
@@ -278,4 +278,8 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+
 

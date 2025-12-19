@@ -614,7 +614,7 @@ def train_neural_lp(max_hops=2, n_epochs=300, learning_rate=0.01):
     print(f"Rules kept (confidence > 0.3): {len(kept_rules)} / {len(results)}")
 
     # Save results
-    output_path = Path('results')
+    output_path = Path('../results')
     output_path.mkdir(exist_ok=True)
 
     # Save learned rules
@@ -648,7 +648,7 @@ def train_neural_lp(max_hops=2, n_epochs=300, learning_rate=0.01):
 
     # Evaluate against ground truth
     try:
-        ground_truth_edges, all_vars = parse_bif_ground_truth('../alarm.bif')
+        ground_truth_edges, all_vars = parse_bif_ground_truth('../../alarm.bif')
         eval_metrics = evaluate_learned_rules(results, ground_truth_edges, all_vars, threshold=0.3)
 
         # Save evaluation metrics

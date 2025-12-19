@@ -95,7 +95,7 @@ def main():
     print("\n[1/2] Loading observational data...")
     loader = CausalDataLoader(
         data_path='data/alarm_data_10000.csv',
-        metadata_path='output/knowledge_graph_metadata.json'
+        metadata_path='old_version/output/knowledge_graph_metadata.json'
     )
     data = loader.load_data()
     var_structure = loader.get_variable_structure()
@@ -214,4 +214,8 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+
 

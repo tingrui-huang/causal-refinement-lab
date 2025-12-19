@@ -180,3 +180,7 @@ class SimpleThreeVarFCISimulator(FCISimulator):
         
         return skeleton, mask
 
+
+
+
+

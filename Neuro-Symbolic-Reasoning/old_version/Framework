@@ -1,0 +1,31 @@
+load data
+   ↓
+[Data Loader]
+   ├─ CSV → OneHot (N, 105)
+   └─ Variable Structure (37 vars → 105 states)
+   ↓
+[Prior Builder]
+   ├─ FCI skeleton → skeleton_mask (105, 105)
+   ├─ LLM direction → direction_prior (105, 105)
+   └─ Block structure → List[{var_pair, row_indices, col_indices}]
+   ↓
+[Model Initialization]
+   └─ raw_adj (105, 105) ← logit(direction_prior)
+   ↓
+[Training Loop] × 200 epochs
+   ├─ Forward Pass
+   │   └─ adjacency = sigmoid(raw_adj) * skeleton_mask
+   │   └─ predictions = observations @ adjacency
+   │
+   ├─ Loss Computation
+   │   ├─ L_recon = BCE(predictions, observations)
+   │   ├─ L_sparse = Σ_blocks ||W_block ⊙ P_block||_F
+   │   └─ L_cycle = Σ_pairs ||W_A→B||_F × ||W_B→A||_F
+   │
+   └─ Backward Pass
+       └─ Update raw_adj via gradient descent
+   ↓
+[Evaluation]
+   ├─ Extract learned edges (threshold = 0.1)
+   ├─ Compare with ground truth
+   └─ Metrics: Precision, Recall, F1, Orientation Accuracy

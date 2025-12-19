@@ -1,40 +1,49 @@
 """
 Prior Builder Module
 
+Dataset-agnostic prior builder for causal discovery pipeline.
+
 Integrates prior knowledge from:
 1. FCI: Skeleton mask (which variable pairs are connected)
 2. LLM: Direction prior (initial weights for specific rules)
-3. Domain knowledge: Normal state handling
+3. Domain knowledge: Normal state handling (dataset-specific)
 """
 
 import torch
 import pandas as pd
-from typing import Dict, List, Tuple, Set
+from typing import Dict, List, Tuple, Set, Optional
 from pathlib import Path
 
 
 class PriorBuilder:
     """
-    Build prior knowledge structures for causal discovery
+    Dataset-agnostic prior builder for causal discovery
     
     Key responsibilities:
-    1. FCI skeleton mask: (105, 105) binary mask
-    2. LLM direction prior: (105, 105) initial weights
-    3. Normal penalty weights: (105, 105) for weighted Group Lasso
+    1. FCI skeleton mask: (n_states, n_states) binary mask
+    2. LLM direction prior: (n_states, n_states) initial weights
+    3. Domain-specific penalty weights: (n_states, n_states) for weighted Group Lasso
     4. Block structure: List of blocks for Group Lasso
+    
+    Supports any dataset with proper variable structure metadata.
     """
     
-    def __init__(self, var_structure: Dict):
+    def __init__(self, var_structure: Dict, dataset_name: Optional[str] = None):
         """
         Args:
             var_structure: Variable structure from DataLoader
+            dataset_name: Optional dataset name for dataset-specific logic
         """
         self.var_structure = var_structure
         self.n_states = var_structure['n_states']
+        self.dataset_name = dataset_name or "Unknown"
         
         print("=" * 70)
         print("PRIOR BUILDER INITIALIZED")
         print("=" * 70)
+        print(f"Dataset: {self.dataset_name}")
+        print(f"Variables: {var_structure['n_variables']}")
+        print(f"States: {self.n_states}")
     
     def build_skeleton_mask_from_fci(self, fci_csv_path: str) -> torch.Tensor:
         """
@@ -74,6 +83,11 @@ class PriorBuilder:
         
         # Count edges
         edge_count = 0
+        directed_count = 0
+        bidirectional_count = 0
+        
+        # Check if edge_type column exists
+        has_edge_type = 'edge_type' in df_fci.columns
         
         # For each FCI edge, enable the entire block
         for _, row in df_fci.iterrows():
@@ -92,10 +106,22 @@ class PriorBuilder:
             states_a = self.var_structure['var_to_states'][var_a]
             states_b = self.var_structure['var_to_states'][var_b]
             
-            # Enable entire block A -> B
+            # Get edge type (if available)
+            edge_type = row.get('edge_type', 'directed') if has_edge_type else 'directed'
+            
+            # Enable block A -> B
             for i in states_a:
                 for j in states_b:
                     skeleton_mask[i, j] = 1
+            
+            # For undirected/partial/tail-tail edges, also enable B -> A
+            if edge_type in ['undirected', 'partial', 'tail-tail']:
+                for i in states_b:
+                    for j in states_a:
+                        skeleton_mask[i, j] = 1
+                bidirectional_count += 1
+            else:
+                directed_count += 1
             
             edge_count += 1
         
@@ -105,6 +131,9 @@ class PriorBuilder:
         
         print(f"\nSkeleton mask statistics:")
         print(f"  Edges processed: {edge_count}")
+        if has_edge_type:
+            print(f"    - Directed (one direction): {directed_count}")
+            print(f"    - Undirected/Partial/Tail-tail (both directions): {bidirectional_count}")
         print(f"  Allowed connections: {allowed} / {total_possible} ({allowed/total_possible*100:.2f}%)")
         print(f"  Forbidden connections: {total_possible - allowed}")
         
@@ -190,28 +219,44 @@ class PriorBuilder:
         return direction_prior
     
     def build_normal_penalty_weights(self, normal_weight: float = 0.1, 
-                                     abnormal_weight: float = 1.0) -> torch.Tensor:
+                                     abnormal_weight: float = 1.0,
+                                     normal_keyword: str = 'Normal') -> torch.Tensor:
         """
-        Build penalty weight matrix for Weighted Group Lasso
+        Build penalty weight matrix for Weighted Group Lasso (dataset-agnostic)
         
-        Critical for Phase 2: This implements Gemini's suggestion
+        This implements domain-specific penalty weighting. For datasets with
+        "normal" states (like ALARM), we can give lower penalty to normal->normal
+        connections. For other datasets, this returns uniform weights.
         
         Args:
             normal_weight: Weight for Normal -> Normal (low, e.g., 0.1)
             abnormal_weight: Weight for other connections (high, e.g., 1.0)
+            normal_keyword: Keyword to identify normal states (default: 'Normal')
         
         Returns:
-            Penalty weight matrix (105, 105)
+            Penalty weight matrix (n_states, n_states)
             
         Logic:
-            - Normal -> Normal: low weight (allow but don't force)
-            - All other: high weight (force sparsity)
+            - If dataset has "normal" states: Normal -> Normal gets low weight
+            - Otherwise: Uniform weights for all connections
         """
         print("\n" + "=" * 70)
-        print("BUILDING NORMAL PENALTY WEIGHTS")
+        print("BUILDING PENALTY WEIGHTS")
         print("=" * 70)
         
         penalty_weights = torch.ones(self.n_states, self.n_states) * abnormal_weight
+        
+        # Check if dataset has "normal" states
+        has_normal_states = any(normal_keyword in self.var_structure['idx_to_state'][i] 
+                               for i in range(self.n_states))
+        
+        if not has_normal_states:
+            print(f"Dataset does not have '{normal_keyword}' states - using uniform weights")
+            print(f"  All connections: weight={abnormal_weight}")
+            return penalty_weights
+        
+        # Dataset has normal states - apply differential weighting
+        print(f"Dataset has '{normal_keyword}' states - applying differential weighting")
         
         normal_to_normal_count = 0
         
@@ -220,8 +265,8 @@ class PriorBuilder:
                 state_i_name = self.var_structure['idx_to_state'][i]
                 state_j_name = self.var_structure['idx_to_state'][j]
                 
-                is_i_normal = 'Normal' in state_i_name
-                is_j_normal = 'Normal' in state_j_name
+                is_i_normal = normal_keyword in state_i_name
+                is_j_normal = normal_keyword in state_j_name
                 
                 # Only Normal -> Normal gets low weight
                 if is_i_normal and is_j_normal:
@@ -339,23 +384,32 @@ class PriorBuilder:
 
 
 if __name__ == "__main__":
-    # Test the prior builder
+    # Test the prior builder with ALARM dataset
     import sys
-    sys.path.append('..')
+    from pathlib import Path
+    
+    # Add parent directory to path
+    sys.path.insert(0, str(Path(__file__).parent.parent))
     from modules.data_loader import CausalDataLoader
+    
+    print("Testing PriorBuilder with ALARM dataset\n")
+    
+    # Use absolute paths for testing
+    base_dir = Path(__file__).parent.parent
     
     # Load data first to get variable structure
     loader = CausalDataLoader(
-        data_path='data/alarm_data_10000.csv',
-        metadata_path='output/knowledge_graph_metadata.json'
+        data_path=str(base_dir / 'data' / 'alarm' / 'alarm_data_10000.csv'),
+        metadata_path=str(base_dir / 'data' / 'alarm' / 'metadata.json')
     )
     var_structure = loader.get_variable_structure()
     
     # Build priors
-    prior_builder = PriorBuilder(var_structure)
+    prior_builder = PriorBuilder(var_structure, dataset_name='ALARM')
     priors = prior_builder.get_all_priors(
-        fci_csv_path='data/edges_Hybrid_FCI_LLM_20251207_230956.csv',
-        llm_rules_path='llm_prior_rules'
+        fci_skeleton_path=str(base_dir / 'data' / 'alarm' / 'edges_FCI_20251207_230824.csv'),
+        llm_direction_path=str(base_dir / 'data' / 'alarm' / 'edges_Hybrid_FCI_LLM_20251207_230956.csv'),
+        use_llm_prior=True
     )
     
     print("\n" + "=" * 70)

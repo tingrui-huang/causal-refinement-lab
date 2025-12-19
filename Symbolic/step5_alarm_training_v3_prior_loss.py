@@ -118,35 +118,36 @@ def compute_prior_loss(W: torch.Tensor, W_prior: torch.Tensor) -> torch.Tensor:
 def train_phase1_signal(
     model: NeuralLP,
     data: torch.Tensor,
-    target_idx: int,
     n_epochs: int = 100,
     learning_rate: float = 0.01,
     l1_lambda: float = 0.001,
     print_every: int = 20
 ):
-    """Phase 1: Learn signal with minimal regularization (no prior loss yet)."""
+    """Phase 1: Learn signal with minimal regularization (FULL GRAPH PREDICTION)."""
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    targets = data[:, target_idx]
+    n_vars = data.shape[1]
     
     history = {'total_loss': [], 'mse_loss': [], 'l1_loss': []}
     
     print("\n" + "=" * 70)
-    print("PHASE 1: LEARNING SIGNAL (NO PRIOR LOSS)")
+    print("PHASE 1: LEARNING SIGNAL - FULL GRAPH PREDICTION")
     print("=" * 70)
     print(f"Goal: Let data signals strengthen freely")
+    print(f"  - Train on ALL {n_vars} variables (not just one target)")
     print(f"  - Both LLM and reverse directions can grow")
     print(f"  - No penalty for deviation yet")
-    print(f"Target variable: {target_idx}")
     print(f"Epochs: {n_epochs}")
     print(f"Learning rate: {learning_rate}")
     print(f"L1 lambda: {l1_lambda} (minimal)")
     print("-" * 70)
     
     for epoch in range(n_epochs):
-        predictions = model.predict_target(data, target_idx)
+        # Predict ALL variables
+        all_predictions = model.forward(data)
         adjacency = model.adjacency()
         
-        mse_loss = torch.nn.functional.mse_loss(predictions, targets)
+        # Compute MSE loss for ALL variables
+        mse_loss = torch.nn.functional.mse_loss(all_predictions, data)
         l1_loss = torch.sum(torch.abs(adjacency))
         total_loss = mse_loss + l1_lambda * l1_loss
         
@@ -163,14 +164,13 @@ def train_phase1_signal(
                   f"MSE: {mse_loss.item():.4f} | L1: {l1_loss.item():.4f}")
     
     print("-" * 70)
-    print("Phase 1 complete!")
+    print("Phase 1 complete! All variables trained.")
     return history
 
 
 def train_phase2_prune_with_prior(
     model: NeuralLP,
     data: torch.Tensor,
-    target_idx: int,
     init_weights: torch.Tensor,
     n_epochs: int = 100,
     learning_rate: float = 0.005,
@@ -180,14 +180,14 @@ def train_phase2_prune_with_prior(
     print_every: int = 20
 ):
     """
-    Phase 2: Prune noise with DAG constraint, L1, AND Prior Loss.
+    Phase 2: Prune noise with DAG constraint, L1, AND Prior Loss (FULL GRAPH).
     
     NEW: Prior Loss = λ||W - W_LLM||²
     
     This penalizes deviation from LLM suggestions, making reversals harder.
     """
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    targets = data[:, target_idx]
+    n_vars = data.shape[1]
     
     history = {
         'total_loss': [], 
@@ -198,9 +198,10 @@ def train_phase2_prune_with_prior(
     }
     
     print("\n" + "=" * 70)
-    print("PHASE 2: PRUNING + DAG + PRIOR LOSS (GEMINI'S IMPROVEMENT)")
+    print("PHASE 2: PRUNING + DAG + PRIOR LOSS - FULL GRAPH PREDICTION")
     print("=" * 70)
     print(f"Goal: Resolve conflicts while respecting LLM knowledge")
+    print(f"  - Train on ALL {n_vars} variables")
     print(f"  - DAG constraint eliminates cycles")
     print(f"  - Strong L1 suppresses weak edges")
     print(f"  - NEW: Prior loss penalizes deviation from LLM")
@@ -212,10 +213,12 @@ def train_phase2_prune_with_prior(
     print("-" * 70)
     
     for epoch in range(n_epochs):
-        predictions = model.predict_target(data, target_idx)
+        # Predict ALL variables
+        all_predictions = model.forward(data)
         adjacency = model.adjacency()
         
-        mse_loss = torch.nn.functional.mse_loss(predictions, targets)
+        # MSE loss for ALL variables
+        mse_loss = torch.nn.functional.mse_loss(all_predictions, data)
         l1_loss = torch.sum(torch.abs(adjacency))
         dag_loss = compute_dag_constraint(adjacency)
         prior_loss = compute_prior_loss(adjacency, init_weights)  # NEW!
@@ -242,8 +245,78 @@ def train_phase2_prune_with_prior(
                   f"DAG: {dag_loss.item():.6f} | Prior: {prior_loss.item():.4f}")
     
     print("-" * 70)
-    print("Phase 2 complete! Prior loss prevented easy reversals.")
+    print("Phase 2 complete! All variables trained with prior loss.")
     return history
+
+
+def evaluate_against_ground_truth(
+    learned_adj: np.ndarray,
+    ground_truth: np.ndarray,
+    threshold: float = 0.3
+):
+    """
+    Complete evaluation: Precision, Recall, F1, Orientation Accuracy, SHD.
+    
+    Returns all metrics in one dictionary.
+    """
+    # Binarize
+    pred = (np.abs(learned_adj) > threshold).astype(int)
+    gt = ground_truth.astype(int)
+    
+    # Basic counts
+    tp = ((gt == 1) & (pred == 1)).sum()
+    fp = ((gt == 0) & (pred == 1)).sum()
+    fn = ((gt == 1) & (pred == 0)).sum()
+    
+    # Precision, Recall, F1
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
+    
+    # Orientation Accuracy
+    n_vars = pred.shape[0]
+    correct_orient = 0
+    total_orient = 0
+    for i in range(n_vars):
+        for j in range(i+1, n_vars):
+            gt_has = (gt[i,j] == 1) or (gt[j,i] == 1)
+            pred_has = (pred[i,j] == 1) or (pred[j,i] == 1)
+            if gt_has and pred_has:
+                total_orient += 1
+                if gt[i,j] == pred[i,j] and gt[j,i] == pred[j,i]:
+                    correct_orient += 1
+    
+    orientation_acc = correct_orient / total_orient if total_orient > 0 else 0
+    
+    # SHD = False Positives + False Negatives
+    # Note: Reversals are already counted in FP+FN
+    # (e.g., GT: A->B, Pred: B->A gives FP=1 for B->A, FN=1 for A->B)
+    shd = fp + fn
+    
+    # Count reversals separately (for reporting, not for SHD)
+    reversals = 0
+    for i in range(n_vars):
+        for j in range(i+1, n_vars):
+            gt_has = (gt[i,j] == 1) or (gt[j,i] == 1)
+            pred_has = (pred[i,j] == 1) or (pred[j,i] == 1)
+            if gt_has and pred_has:
+                # Both have edge, check if direction matches
+                if not (gt[i,j] == pred[i,j] and gt[j,i] == pred[j,i]):
+                    reversals += 1
+    
+    return {
+        'precision': precision,
+        'recall': recall,
+        'f1': f1,
+        'orientation_accuracy': orientation_acc,
+        'shd': shd,
+        'reversals': reversals,  # For info only
+        'tp': tp,
+        'fp': fp,
+        'fn': fn,
+        'predicted_edges': pred.sum(),
+        'ground_truth_edges': gt.sum()
+    }
 
 
 def analyze_llm_corrections(
@@ -328,15 +401,18 @@ def analyze_llm_corrections(
 
 
 def main():
-    """Main training pipeline with Prior Loss."""
+    """Main training pipeline with Prior Loss - FULL GRAPH PREDICTION."""
     print("=" * 70)
-    print("STEP 5 (v3): NEURAL LP + PRIOR LOSS (GEMINI'S IMPROVEMENT)")
+    print("STEP 5 (v3): NEURAL LP + PRIOR LOSS - FULL GRAPH PREDICTION")
     print("=" * 70)
-    print("\nKEY INNOVATION:")
-    print("  - Prior Loss: lambda * ||W - W_LLM||^2")
-    print("  - Penalizes deviation from LLM suggestions")
-    print("  - Requires stronger data evidence to reverse")
-    print("  - Should prevent false corrections like BP -> CO")
+    print("\nKEY INNOVATIONS:")
+    print("  1. FULL GRAPH PREDICTION: Train on ALL variables (not just one)")
+    print("     - Can learn ALL edges in the graph")
+    print("     - Expected: Much higher recall!")
+    print("  2. Prior Loss: lambda * ||W - W_LLM||^2")
+    print("     - Penalizes deviation from LLM suggestions")
+    print("     - Requires stronger data evidence to reverse")
+    print("     - Should prevent false corrections like BP -> CO")
     
     # Load REAL data
     data_path = Path('../alarm_data.csv')
@@ -369,8 +445,10 @@ def main():
     
     # Initialize Model
     print("\n" + "=" * 70)
-    print("INITIALIZING NEURAL LP MODEL")
+    print("INITIALIZING NEURAL LP MODEL - FULL GRAPH MODE")
     print("=" * 70)
+    print(f"Training strategy: Multi-target (all {n_vars} variables)")
+    print(f"Expected improvement: Recall 71% -> 85%+ (can learn all edges)")
     
     model = NeuralLP(
         n_vars=n_vars,
@@ -379,26 +457,22 @@ def main():
         init_weights=init_weights
     )
     
-    # Target variable
-    target_var = 'BP'
-    if target_var not in var_names:
-        target_var = var_names[0]
-    
-    target_idx = var_names.index(target_var)
-    print(f"\nTarget variable: {target_var} (index {target_idx})")
-    
     # Convert init_weights to tensor for prior loss
     init_weights_tensor = torch.FloatTensor(init_weights)
     
-    # Two-Phase Training
+    # Two-Phase Training (FULL GRAPH)
+    print("\n" + "=" * 70)
+    print("STARTING TWO-PHASE TRAINING - FULL GRAPH PREDICTION")
+    print("=" * 70)
+    
     history1 = train_phase1_signal(
-        model, data_tensor, target_idx,
-        n_epochs=100, learning_rate=0.01, l1_lambda=0.001
+        model, data_tensor,
+        n_epochs=300, learning_rate=0.01, l1_lambda=0.001
     )
     
     history2 = train_phase2_prune_with_prior(
-        model, data_tensor, target_idx, init_weights_tensor,
-        n_epochs=100, learning_rate=0.005, 
+        model, data_tensor, init_weights_tensor,
+        n_epochs=300, learning_rate=0.005,
         l1_lambda=0.08, dag_lambda=2.0, 
         prior_lambda=0.5  # NEW: Prior loss weight
     )
@@ -414,10 +488,44 @@ def main():
     np.save(output_dir / 'alarm_learned_adjacency_v3_prior.npy', learned_adj)
     print(f"\nSaved to {output_dir / 'alarm_learned_adjacency_v3_prior.npy'}")
     
-    # Analyze
+    # Analyze LLM corrections
     correction_stats = analyze_llm_corrections(
         learned_adj, init_weights, var_names, threshold=0.3
     )
+    
+    # Evaluate against ground truth if available
+    gt_file = output_dir / 'alarm_ground_truth_aligned.npy'
+    eval_metrics = None
+    
+    if gt_file.exists():
+        print("\n" + "=" * 70)
+        print("EVALUATION vs GROUND TRUTH")
+        print("=" * 70)
+        
+        ground_truth = np.load(gt_file)
+        eval_metrics = evaluate_against_ground_truth(learned_adj, ground_truth, threshold=0.3)
+        
+        print(f"\nPerformance Metrics:")
+        print(f"  Precision:            {eval_metrics['precision']:.1%}")
+        print(f"  Recall:               {eval_metrics['recall']:.1%}")
+        print(f"  F1 Score:             {eval_metrics['f1']:.1%}")
+        print(f"  Orientation Accuracy: {eval_metrics['orientation_accuracy']:.1%}")
+        
+        print(f"\nEdge Counts:")
+        print(f"  Ground Truth:   {eval_metrics['ground_truth_edges']} edges")
+        print(f"  Predicted:      {eval_metrics['predicted_edges']} edges")
+        print(f"  True Positive:  {eval_metrics['tp']}")
+        print(f"  False Positive: {eval_metrics['fp']} (extra edges)")
+        print(f"  False Negative: {eval_metrics['fn']} (missing edges)")
+        print(f"  Reversals:      {eval_metrics['reversals']} (wrong direction)")
+        
+        print(f"\nStructural Hamming Distance (SHD): {eval_metrics['shd']}")
+        print(f"  = FP({eval_metrics['fp']}) + FN({eval_metrics['fn']})")
+        print(f"  Note: Reversals already counted in FP+FN")
+        print(f"  (Lower is better, 0 = perfect match)")
+    else:
+        print("\n[INFO] Ground truth not found. Skipping evaluation.")
+        print("       Run step6_evaluate_ground_truth.py first to generate ground truth.")
     
     # Show top edges
     print("\n" + "=" * 70)
@@ -437,25 +545,44 @@ def main():
     
     # Final summary
     print("\n" + "=" * 70)
-    print("STEP 5 (v3 - PRIOR LOSS) COMPLETE!")
+    print("STEP 5 (v3 - FULL GRAPH + PRIOR LOSS) COMPLETE!")
     print("=" * 70)
     
     print(f"\nLLM Correction Summary:")
-    print(f"  - Total LLM suggestions: {correction_stats['total']}")
-    print(f"  - Kept (prior loss helped): {correction_stats['kept']}")
-    print(f"  - Reversed (overcame prior): {correction_stats['reversed']}")
-    print(f"  - Pruned: {correction_stats['pruned']}")
+    print(f"  Total suggestions: {correction_stats['total']}")
+    print(f"  Kept:     {correction_stats['kept']}")
+    print(f"  Reversed: {correction_stats['reversed']}")
+    print(f"  Pruned:   {correction_stats['pruned']}")
     
-    if correction_stats['reversed'] < 1:
+    if eval_metrics:
+        print(f"\nFinal Performance:")
+        print(f"  Precision: {eval_metrics['precision']:.1%}")
+        print(f"  Recall:    {eval_metrics['recall']:.1%}")
+        print(f"  F1 Score:  {eval_metrics['f1']:.1%}")
+        print(f"  SHD:       {eval_metrics['shd']}")
+    
+    if correction_stats['reversed'] == 0:
         print(f"\n*** SUCCESS! Prior loss prevented false corrections! ***")
-        print("LLM suggestions were respected unless data had very strong evidence.")
     elif correction_stats['reversed'] == 1:
-        print(f"\n*** PARTIAL SUCCESS! Only 1 reversal (vs previous versions) ***")
-        print("Prior loss made reversals harder. May need stronger prior_lambda.")
+        print(f"\n*** 1 reversal (Prior loss made it harder but not impossible) ***")
     
-    print("\nCompare with:")
-    print("  - v2 (no prior loss): 1 reversal (wrong)")
-    print("  - v3 (with prior loss): ? reversals")
+    if eval_metrics:
+        print("\n" + "=" * 70)
+        print("VERSION COMPARISON")
+        print("=" * 70)
+        print("v2 (no prior loss):  Precision 33%, Recall 2%,  F1 4%,  SHD ~44")
+        print("v3 (single-target):  Precision 80%, Recall 71%, F1 75%, SHD ~13")
+        print(f"v3 FULL GRAPH:       Precision {eval_metrics['precision']:.0%}, Recall {eval_metrics['recall']:.0%}, F1 {eval_metrics['f1']:.0%}, SHD {eval_metrics['shd']}")
+        print("\nKey improvement: Full graph can learn ALL edges (not just one target)")
+    else:
+        print("\n[Run step6_evaluate_ground_truth.py first to see performance metrics]")
+    
+    print("\n" + "=" * 70)
+    if eval_metrics:
+        print("TRAINING COMPLETE - All metrics calculated above!")
+    else:
+        print("TRAINING COMPLETE - Run step6_evaluate_ground_truth.py for metrics")
+    print("=" * 70)
 
 
 if __name__ == "__main__":

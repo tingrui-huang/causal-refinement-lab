@@ -62,7 +62,7 @@ def load_data_and_rules():
     print("LOADING KNOWLEDGE GRAPH & RULES")
 
     # 1. Load Metadata to build State Map
-    with open('knowledge_graph_metadata.json', 'r') as f:
+    with open('output/knowledge_graph_metadata.json', 'r') as f:
         meta = json.load(f)
 
     # 建立状态索引: "LVEDVOLUME_Low" -> 0, "LVEDVOLUME_High" -> 1
@@ -86,7 +86,7 @@ def load_data_and_rules():
 
     # 2. Load Patient Data (Facts)
     # 我们直接读 CSV 或者 triples JSON 都可以，读 triples 更符合 KG 逻辑
-    with open('knowledge_graph_triples.json', 'r') as f:
+    with open('output/knowledge_graph_triples.json', 'r') as f:
         triples = json.load(f)
 
     # 构建数据矩阵 (Patients x States)
@@ -247,7 +247,7 @@ def train_logic_engine():
     print(f"Total Rules Kept: {valid_count} / {len(results)}")
 
     # Save final Causal Graph
-    output_path = Path('results')
+    output_path = Path('../results')
     output_path.mkdir(exist_ok=True)
 
     with open(output_path / 'final_causal_rules.txt', 'w') as f:
