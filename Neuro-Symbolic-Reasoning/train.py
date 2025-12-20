@@ -21,6 +21,7 @@ from modules.loss import LossComputer
 from modules.evaluator import CausalGraphEvaluator
 from modules.result_manager import ResultManager
 from modules.metrics import compute_bidirectional_ratio, compute_sparsity_metrics
+from modules.ground_truth_loader import GroundTruthLoader, TuebingenEvaluator
 
 
 def main():
@@ -260,28 +261,57 @@ def main():
     
     t_start = time.time()
     
+    # Get adjacency matrix
+    adjacency = model.get_adjacency()
+    
+    # Determine evaluation type based on dataset
     if cfg['ground_truth_path']:
-        evaluator = CausalGraphEvaluator(
-            ground_truth_path=cfg['ground_truth_path'],
-            var_structure=var_structure
-        )
+        gt_type = cfg.get('ground_truth_type', 'bif')
         
-        # Extract learned edges
-        adjacency = model.get_adjacency()
-        learned_edges = evaluator.extract_learned_edges(
-            adjacency,
-            threshold=cfg['threshold']
-        )
-        
-        # Evaluate
-        metrics = evaluator.evaluate(learned_edges)
-        evaluator.print_metrics(metrics)
+        if gt_type == 'json':
+            # Tuebingen-style pairwise evaluation
+            print("[INFO] Using pairwise evaluation (Tuebingen format)")
+            
+            gt_loader = GroundTruthLoader(cfg['ground_truth_path'], 'json')
+            tuebingen_eval = TuebingenEvaluator(gt_loader, var_structure)
+            
+            # Extract pair_id from dataset name if available
+            pair_id = cfg['dataset_name'] if 'pair' in cfg['dataset_name'] else None
+            
+            results = tuebingen_eval.evaluate_pairwise(adjacency, pair_id)
+            tuebingen_eval.print_results(results)
+            
+            # Convert to metrics dict for consistency
+            metrics = {
+                'predicted_direction': results['predicted_direction'],
+                'confidence': results['confidence'],
+                'correct': results['correct'] if results['correct'] is not None else 'N/A'
+            }
+            learned_edges = set()  # Not applicable for pairwise
+            
+        else:
+            # Graph-based evaluation (ALARM, etc.)
+            print("[INFO] Using graph-based evaluation (BIF format)")
+            
+            evaluator = CausalGraphEvaluator(
+                ground_truth_path=cfg['ground_truth_path'],
+                var_structure=var_structure
+            )
+            
+            # Extract learned edges
+            learned_edges = evaluator.extract_learned_edges(
+                adjacency,
+                threshold=cfg['threshold']
+            )
+            
+            # Evaluate
+            metrics = evaluator.evaluate(learned_edges)
+            evaluator.print_metrics(metrics)
     else:
         print("[WARN] No ground truth available for this dataset")
         print("  Skipping evaluation...")
         metrics = {}
         learned_edges = set()
-        adjacency = model.get_adjacency()
     
     timing['evaluation'] = time.time() - t_start
     print(f"\n[OK] Evaluation completed in {timing['evaluation']:.2f}s")

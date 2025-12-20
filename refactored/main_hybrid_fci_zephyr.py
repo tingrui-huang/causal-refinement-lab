@@ -1,5 +1,5 @@
 """
-Main Program: Hybrid FCI + Zephyr
+Main Program: FCI + LLM (Zephyr-7B)
 
 Strategy:
 1. FCI does the heavy lifting (finds skeleton, handles confounders)
@@ -11,6 +11,14 @@ This combines statistical rigor with open-source LLM reasoning!
 import sys
 import os
 from datetime import datetime
+
+# Load environment variables from .env file
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    # dotenv not installed, will fall back to manual input
+    pass
 
 # Import config and utils
 from config import get_output_dir
@@ -27,10 +35,10 @@ from modules.visualizers import GraphVisualizer
 from modules.reporters import ReportGenerator
 
 
-class HybridFCIZephyrPipeline:
+class FCIZephyrPipeline:
     def __init__(self, data_loader, hf_token, output_dir=None):
         print("=" * 60)
-        print("Initializing Hybrid FCI + Zephyr Pipeline")
+        print("Initializing FCI + LLM (Zephyr-7B) Pipeline")
         print("=" * 60)
         
         self.output_dir = output_dir or get_output_dir()
@@ -67,7 +75,7 @@ class HybridFCIZephyrPipeline:
     
     def run(self, fci_alpha=0.05, validation_alpha=0.05):
         print(f"\n{'='*60}")
-        print(f"Starting Hybrid FCI + Zephyr Pipeline")
+        print(f"Starting FCI + LLM (Zephyr-7B) Pipeline")
         print(f"FCI alpha: {fci_alpha}")
         print(f"Validation alpha: {validation_alpha}")
         print(f"{'='*60}\n")
@@ -200,16 +208,16 @@ class HybridFCIZephyrPipeline:
         
         # Save text report
         self.reporter.save_text_report(self.graph, 
-                                      model_name="Hybrid_FCI_Zephyr",
+                                      model_name="FCI_LLM_Zephyr",
                                       cot_log=self.llm_client.call_log)
         
         # Save edge list
-        self.reporter.save_edge_list(self.graph, model_name="Hybrid_FCI_Zephyr")
+        self.reporter.save_edge_list(self.graph, model_name="FCI_LLM_Zephyr")
         
         # Save visualization
-        filename = f"causal_graph_hybrid_fci_zephyr_{self.timestamp}"
+        filename = f"causal_graph_fci_llm_zephyr_{self.timestamp}"
         self.visualizer.visualize(self.graph, 
-                                 title="Causal Graph (Hybrid: FCI + Zephyr)",
+                                 title="Causal Graph (FCI + LLM Zephyr-7B)",
                                  filename=filename,
                                  save_only=False,
                                  node_color='lightblue',
@@ -219,24 +227,38 @@ class HybridFCIZephyrPipeline:
 
 
 def main():
+    """Main function - runs FCI + Zephyr with parameters from config.py"""
+    from config import FCI_ALPHA, VALIDATION_ALPHA
+    
     print_dataset_info()
     
-    hf_token = input("\nPlease enter your Hugging Face token: ").strip()
+    # Get Hugging Face token from environment variable or user input
+    hf_token = os.getenv('HUGGINGFACE_TOKEN')
     
-    if not hf_token:
-        print("[ERROR] Hugging Face token cannot be empty!")
-        sys.exit(1)
+    if hf_token:
+        print("\n[INFO] Using Hugging Face token from environment variable")
+    else:
+        print("\n[WARN] HUGGINGFACE_TOKEN not found in environment")
+        print("  Tip: Create a .env file with HUGGINGFACE_TOKEN=your_token")
+        hf_token = input("\nPlease enter your Hugging Face token: ").strip()
+        
+        if not hf_token:
+            print("[ERROR] Hugging Face token cannot be empty!")
+            sys.exit(1)
+    
+    print(f"\nUsing parameters from config.py:")
+    print(f"  FCI Alpha: {FCI_ALPHA}")
+    print(f"  Validation Alpha: {VALIDATION_ALPHA}")
     
     # Initialize pipeline
     data_loader = get_active_data_loader()
-    pipeline = HybridFCIZephyrPipeline(data_loader, hf_token)
+    pipeline = FCIZephyrPipeline(data_loader, hf_token)
     
     # Run pipeline
-    pipeline.run(fci_alpha=0.05, validation_alpha=0.05)
+    pipeline.run(fci_alpha=FCI_ALPHA, validation_alpha=VALIDATION_ALPHA)
     
     print("\n" + "=" * 60)
     print(f"All done! Check {get_output_dir()}/ for results.")
-    print("Compare with GPT-3.5 hybrid and pure approaches!")
     print("=" * 60 + "\n")
 
 

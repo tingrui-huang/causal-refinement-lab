@@ -1,9 +1,9 @@
 """
-Main Program: Hybrid FCI + LLM
+Main Program: FCI + LLM (GPT-3.5)
 
 Strategy:
 1. FCI does the heavy lifting (finds skeleton, handles confounders)
-2. LLM resolves ambiguous edges (o-o or o->)
+2. LLM (GPT-3.5) resolves ambiguous edges (o-o or o->)
 
 This combines statistical rigor with domain knowledge!
 """
@@ -11,6 +11,14 @@ This combines statistical rigor with domain knowledge!
 import sys
 import os
 from datetime import datetime
+
+# Load environment variables from .env file
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    # dotenv not installed, will fall back to manual input
+    pass
 
 # Import config and utils
 from config import get_output_dir
@@ -27,10 +35,10 @@ from modules.visualizers import GraphVisualizer
 from modules.reporters import ReportGenerator
 
 
-class HybridFCILLMPipeline:
+class FCILLMPipeline:
     def __init__(self, data_loader, api_key, output_dir=None):
         print("=" * 60)
-        print("Initializing Hybrid FCI + LLM Pipeline")
+        print("Initializing FCI + LLM (GPT-3.5) Pipeline")
         print("=" * 60)
         
         self.output_dir = output_dir or get_output_dir()
@@ -200,16 +208,16 @@ class HybridFCILLMPipeline:
         
         # Save text report
         self.reporter.save_text_report(self.graph, 
-                                      model_name="Hybrid_FCI_LLM",
+                                      model_name="FCI_LLM_GPT35",
                                       cot_log=self.llm_client.call_log)
         
         # Save edge list
-        self.reporter.save_edge_list(self.graph, model_name="Hybrid_FCI_LLM")
+        self.reporter.save_edge_list(self.graph, model_name="FCI_LLM_GPT35")
         
         # Save visualization
-        filename = f"causal_graph_hybrid_fci_llm_{self.timestamp}"
+        filename = f"causal_graph_fci_llm_gpt35_{self.timestamp}"
         self.visualizer.visualize(self.graph, 
-                                 title="Causal Graph (Hybrid: FCI + LLM)",
+                                 title="Causal Graph (FCI + LLM GPT-3.5)",
                                  filename=filename,
                                  save_only=False,
                                  node_color='lightgreen',
@@ -219,25 +227,38 @@ class HybridFCILLMPipeline:
 
 
 def main():
+    """Main function - runs FCI + LLM with parameters from config.py"""
+    from config import FCI_ALPHA, VALIDATION_ALPHA
+    
     print_dataset_info()
     
-    # Get API key
-    api_key = input("\nPlease enter your OpenAI API key: ").strip()
+    # Get API key from environment variable or user input
+    api_key = os.getenv('OPENAI_API_KEY')
     
-    if not api_key:
-        print("[ERROR] API key cannot be empty!")
-        sys.exit(1)
+    if api_key:
+        print("\n[INFO] Using OpenAI API key from environment variable")
+    else:
+        print("\n[WARN] OPENAI_API_KEY not found in environment")
+        print("  Tip: Create a .env file with OPENAI_API_KEY=your_key")
+        api_key = input("\nPlease enter your OpenAI API key: ").strip()
+        
+        if not api_key:
+            print("[ERROR] API key cannot be empty!")
+            sys.exit(1)
+    
+    print(f"\nUsing parameters from config.py:")
+    print(f"  FCI Alpha: {FCI_ALPHA}")
+    print(f"  Validation Alpha: {VALIDATION_ALPHA}")
     
     # Initialize pipeline
     data_loader = get_active_data_loader()
-    pipeline = HybridFCILLMPipeline(data_loader, api_key)
+    pipeline = FCILLMPipeline(data_loader, api_key)
     
     # Run pipeline
-    pipeline.run(fci_alpha=0.05, validation_alpha=0.05)
+    pipeline.run(fci_alpha=FCI_ALPHA, validation_alpha=VALIDATION_ALPHA)
     
     print("\n" + "=" * 60)
     print(f"All done! Check {get_output_dir()}/ for results.")
-    print("Compare with pure FCI and pure LLM approaches!")
     print("=" * 60 + "\n")
 
 
