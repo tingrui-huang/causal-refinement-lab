@@ -15,7 +15,7 @@ This script tests this hypothesis systematically.
 import json
 import sys
 from pathlib import Path
-log_path = Path(r'd:\Users\trhua\Research\causal-refinement-lab\.cursor\debug.log')
+log_path = Path(r'/.cursor/debug.log')
 log_path.parent.mkdir(parents=True, exist_ok=True)
 with open(log_path, 'a', encoding='utf-8') as f:
     f.write(json.dumps({'location':'fine_grained_asymmetry_analysis.py:1','message':'Script started','data':{'cwd':str(Path.cwd()),'script_path':str(Path(__file__).absolute())},'timestamp':__import__('time').time()*1000,'sessionId':'debug-session','runId':'run1','hypothesisId':'H1,H2'}) + '\n')
@@ -233,7 +233,7 @@ def main():
     import json
     from pathlib import Path
     import sys
-    log_path = Path(r'd:\Users\trhua\Research\causal-refinement-lab\.cursor\debug.log')
+    log_path = Path(r'/.cursor/debug.log')
     with open(log_path, 'a', encoding='utf-8') as f:
         f.write(json.dumps({'location':'fine_grained_asymmetry_analysis.py:main','message':'Main function entry','data':{'cwd':str(Path.cwd())},'timestamp':__import__('time').time()*1000,'sessionId':'debug-session','runId':'run1','hypothesisId':'H1,H2,H3'}) + '\n')
     # #endregion
@@ -336,7 +336,7 @@ if __name__ == "__main__":
     import json
     from pathlib import Path
     import sys
-    log_path = Path(r'd:\Users\trhua\Research\causal-refinement-lab\.cursor\debug.log')
+    log_path = Path(r'/.cursor/debug.log')
     with open(log_path, 'a', encoding='utf-8') as f:
         f.write(json.dumps({'location':'fine_grained_asymmetry_analysis.py:__main__','message':'Script __main__ block executing','data':{'python_version':sys.version,'executable':sys.executable},'timestamp':__import__('time').time()*1000,'sessionId':'debug-session','runId':'run1','hypothesisId':'H2,H3'}) + '\n')
     # #endregion

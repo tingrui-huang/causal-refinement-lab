@@ -111,25 +111,56 @@ class FCIPipeline:
 
 
 def main():
+    """Main function - runs FCI with parameters from config.py"""
+    from config import FCI_INDEPENDENCE_TEST, FCI_ALPHA, GROUND_TRUTH_PATH
+    
     print_dataset_info()
     
-    test_input = input("\nChoose test (default: chisq): ").strip().lower()
-    independence_test = test_input if test_input in ['chisq', 'gsq', 'fisherz'] else 'chisq'
+    # Use parameters from config.py (non-interactive mode)
+    independence_test = FCI_INDEPENDENCE_TEST
+    alpha = FCI_ALPHA
     
-    # Get alpha
-    alpha_input = input("\nSignificance level (default: 0.05): ").strip()
-    alpha = float(alpha_input) if alpha_input else 0.05
+    print(f"\nUsing parameters from config.py:")
+    print(f"  Independence test: {independence_test}")
+    print(f"  Significance level: {alpha}")
     
     # Initialize pipeline
     data_loader = get_active_data_loader()
     pipeline = FCIPipeline(data_loader)
     
     # Run pipeline
-    print(f"\nStarting FCI algorithm with {independence_test} test...")
+    print(f"\nStarting FCI algorithm...")
     pipeline.run(independence_test=independence_test, alpha=alpha)
     
     print("\n" + "=" * 60)
-    print(f"All done! Check {get_output_dir()}/ for results.")
+    print(f"FCI completed! Results saved to {get_output_dir()}/")
+    print("=" * 60)
+    
+    # === AUTO-EVALUATION ===
+    print("\n" + "=" * 60)
+    print("Running automatic evaluation...")
+    print("=" * 60)
+    
+    try:
+        from evaluate_fci import evaluate_fci, find_latest_fci_csv
+        from pathlib import Path
+        
+        latest_fci = find_latest_fci_csv()
+        gt_path = Path(GROUND_TRUTH_PATH)
+        
+        if latest_fci and gt_path.exists():
+            evaluate_fci(latest_fci, gt_path, output_dir=get_output_dir())
+        elif not latest_fci:
+            print("[WARN] Could not find FCI output for evaluation")
+        elif not gt_path.exists():
+            print(f"[WARN] Ground truth file not found: {gt_path}")
+            print("Update GROUND_TRUTH_PATH in config.py to enable evaluation")
+    except Exception as e:
+        print(f"[WARN] Evaluation failed: {e}")
+        print("You can run 'python evaluate_fci.py' manually later.")
+    
+    print("\n" + "=" * 60)
+    print("All done!")
     print("=" * 60 + "\n")
 
 

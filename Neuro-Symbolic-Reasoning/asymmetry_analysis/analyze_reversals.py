@@ -131,8 +131,8 @@ def main():
     print("=" * 70)
     
     # Paths
-    adjacency_path = 'results/complete/complete_adjacency.pt'
-    metadata_path = 'old_version/output/knowledge_graph_metadata.json'
+    adjacency_path = '../results/complete/complete_adjacency.pt'
+    metadata_path = '../old_version/output/knowledge_graph_metadata.json'
     ground_truth_path = 'data/alarm.bif'
     llm_prior_path = 'data/edges_Hybrid_FCI_LLM_20251207_230956.csv'
     
