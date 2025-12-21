@@ -51,7 +51,7 @@ def train_causal_discovery(config: dict):
     }
     
     # Initialize result manager
-    result_manager = ResultManager(base_dir=config.get('results_dir', 'results'))
+    result_manager = ResultManager(base_dir=config.get('results_dir', '../results'))
     
     # ========================================================================
     # DATA LOADING
@@ -288,3 +288,6 @@ if __name__ == "__main__":
     
     print("\nTraining complete!")
     print(f"Check results in: {results['run_dir']}")
+
+
+

@@ -22,16 +22,18 @@ class DataPreprocessor:
     Design principle: Extensibility without breaking existing code
     """
     
-    def __init__(self, data_type: str = 'discrete'):
+    def __init__(self, data_type: str = 'discrete', strategy: str = 'quantile'):
         """
         Args:
             data_type: Type of data ('discrete' or 'continuous')
+            strategy: Discretization strategy ('quantile' or 'uniform')
         """
         self.data_type = data_type
+        self.strategy = strategy
         self.discretizer = None
         self.metadata = {}
     
-    def fit_transform(self, data: pd.DataFrame, n_bins: int = 3) -> Tuple[pd.DataFrame, Dict]:
+    def fit_transform(self, data: pd.DataFrame, n_bins: int = 3, strategy: str = None) -> Tuple[pd.DataFrame, Dict]:
         """
         Fit and transform data based on type
         
@@ -48,18 +50,21 @@ class DataPreprocessor:
         
         elif self.data_type == 'continuous':
             # Need discretization
-            return self._discretize_continuous(data, n_bins)
+            # Use provided strategy or fall back to instance strategy
+            disc_strategy = strategy if strategy is not None else self.strategy
+            return self._discretize_continuous(data, n_bins, disc_strategy)
         
         else:
             raise ValueError(f"Unsupported data type: {self.data_type}")
     
-    def _discretize_continuous(self, data: pd.DataFrame, n_bins: int) -> Tuple[pd.DataFrame, Dict]:
+    def _discretize_continuous(self, data: pd.DataFrame, n_bins: int, strategy: str = 'quantile') -> Tuple[pd.DataFrame, Dict]:
         """
-        Discretize continuous data using quantile-based binning
+        Discretize continuous data using specified binning strategy
         
         Args:
             data: Continuous dataframe
             n_bins: Number of bins per variable
+            strategy: 'quantile' (equal samples) or 'uniform' (equal width, preserves density)
         
         Returns:
             Tuple of (discretized_data, metadata)
@@ -67,31 +72,48 @@ class DataPreprocessor:
         print("\n" + "=" * 70)
         print("DISCRETIZING CONTINUOUS DATA")
         print("=" * 70)
-        print(f"Strategy: Quantile-based binning")
+        print(f"Strategy: {strategy.upper()} binning")
+        if strategy == 'uniform':
+            print("  [INFO] Uniform binning preserves data density asymmetry!")
+            print("  [INFO] This creates gradient differences for symmetry breaking.")
         print(f"Number of bins: {n_bins}")
+        
+        # Check for NaN values and handle them
+        n_samples_before = len(data)
+        if data.isnull().any().any():
+            n_nan = data.isnull().any(axis=1).sum()
+            print(f"\n[WARNING] Found {n_nan} rows with NaN values ({n_nan/n_samples_before*100:.2f}%)")
+            print(f"[INFO] Dropping rows with NaN (sklearn KBinsDiscretizer requirement)")
+            data = data.dropna()
+            n_samples_after = len(data)
+            print(f"[INFO] Samples: {n_samples_before} -> {n_samples_after} (removed {n_samples_before - n_samples_after})")
+            
+            if len(data) == 0:
+                raise ValueError("All samples contain NaN - cannot proceed with discretization")
         
         # Initialize discretizer
         self.discretizer = KBinsDiscretizer(
             n_bins=n_bins,
             encode='ordinal',
-            strategy='quantile'
+            strategy=strategy
         )
         
         # Fit and transform
         data_array = data.values
         discretized_array = self.discretizer.fit_transform(data_array)
         
-        # Convert back to DataFrame
+        # Convert back to DataFrame (preserve the cleaned index)
         discretized_df = pd.DataFrame(
             discretized_array.astype(int),
-            columns=data.columns
+            columns=data.columns,
+            index=data.index  # Use cleaned data's index
         )
         
         # Store metadata
         metadata = {
             'type': 'continuous_discretized',
             'n_bins': n_bins,
-            'strategy': 'quantile',
+            'strategy': strategy,
             'bin_edges': self.discretizer.bin_edges_,
             'original_columns': list(data.columns)
         }
@@ -222,3 +244,6 @@ if __name__ == "__main__":
     print("=" * 80)
     print("\n[INFO] This module is ready for Tuebingen integration")
     print("[INFO] When needed, simply set data_type='continuous' in config")
+
+
+

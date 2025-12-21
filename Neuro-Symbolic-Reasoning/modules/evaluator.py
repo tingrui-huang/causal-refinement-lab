@@ -25,23 +25,44 @@ class CausalGraphEvaluator:
     4. Structural Hamming Distance (SHD)
     """
     
-    def __init__(self, ground_truth_path: str, var_structure: Dict):
+    def __init__(self, ground_truth_path: Optional[str], var_structure: Dict, ground_truth_edges: Optional[list] = None):
         """
         Args:
-            ground_truth_path: Path to BIF file with ground truth
+            ground_truth_path: Path to BIF file with ground truth (can be None if ground_truth_edges provided)
             var_structure: Variable structure from DataLoader
+            ground_truth_edges: Optional list of (source, target) tuples for simple datasets
         """
-        self.ground_truth_path = Path(ground_truth_path)
         self.var_structure = var_structure
         
-        # Parse ground truth
-        self.ground_truth_edges, self.all_variables = self._parse_bif()
-        
-        print("=" * 70)
-        print("EVALUATOR INITIALIZED")
-        print("=" * 70)
-        print(f"Ground truth edges: {len(self.ground_truth_edges)}")
-        print(f"Variables: {len(self.all_variables)}")
+        # Parse ground truth from file or use provided edges
+        if ground_truth_edges is not None:
+            # Use provided ground truth edges (for simple datasets like Tuebingen)
+            self.ground_truth_edges = set(tuple(edge) for edge in ground_truth_edges)
+            self.all_variables = set(var_structure['variable_names'])
+            print("=" * 70)
+            print("EVALUATOR INITIALIZED (MANUAL GROUND TRUTH)")
+            print("=" * 70)
+            print(f"Ground truth edges: {len(self.ground_truth_edges)}")
+            print(f"  Edges: {self.ground_truth_edges}")
+            print(f"Variables: {len(self.all_variables)}")
+        elif ground_truth_path is not None:
+            # Parse from BIF file
+            self.ground_truth_path = Path(ground_truth_path)
+            self.ground_truth_edges, self.all_variables = self._parse_bif()
+            print("=" * 70)
+            print("EVALUATOR INITIALIZED")
+            print("=" * 70)
+            print(f"Ground truth edges: {len(self.ground_truth_edges)}")
+            print(f"Variables: {len(self.all_variables)}")
+        else:
+            # No ground truth available
+            self.ground_truth_edges = set()
+            self.all_variables = set(var_structure['variable_names'])
+            print("=" * 70)
+            print("EVALUATOR INITIALIZED (NO GROUND TRUTH)")
+            print("=" * 70)
+            print(f"Variables: {len(self.all_variables)}")
+            print("[WARN] No ground truth provided - evaluation metrics will be unavailable")
     
     def _parse_bif(self) -> Tuple[Set[Tuple[str, str]], Set[str]]:
         """
@@ -425,4 +446,7 @@ if __name__ == "__main__":
     # Evaluate
     metrics = evaluator.evaluate(learned_edges)
     evaluator.print_metrics(metrics)
+
+
+
 

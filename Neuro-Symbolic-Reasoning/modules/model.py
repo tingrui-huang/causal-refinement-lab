@@ -46,6 +46,9 @@ class CausalDiscoveryModel(nn.Module):
         # Initialize from direction_prior using logit
         # This ensures initial values match LLM suggestions
         init_logits = torch.logit(direction_prior.clamp(0.01, 0.99))
+        
+        # NO random noise - use pure bias to test gradient-based learning
+        # If the model can learn correct direction from pure bias, it proves GSB works
         self.raw_adj = nn.Parameter(init_logits)
         
         # Fixed skeleton mask (FCI constraint)
@@ -58,6 +61,7 @@ class CausalDiscoveryModel(nn.Module):
         print(f"Parameter matrix: {self.raw_adj.shape}")
         print(f"Total parameters: {self.raw_adj.numel()}")
         print(f"Skeleton constraint: {int(skeleton_mask.sum().item())} / {skeleton_mask.numel()} allowed")
+        print(f"Initialization: Pure bias (NO random noise) - testing pure gradient-based learning")
     
     def get_adjacency(self) -> torch.Tensor:
         """

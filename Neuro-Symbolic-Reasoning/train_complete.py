@@ -200,11 +200,73 @@ def train_complete(config: dict):
     print("\n[2/6] Building Priors...")
     dataset_name = data_loader.metadata.get('dataset_name', 'Unknown')
     prior_builder = PriorBuilder(var_structure, dataset_name=dataset_name)
+    
+    # Check if using manual skeleton (for simple datasets like Tuebingen)
+    manual_skeleton = config.get('manual_skeleton', None)
+    
     priors = prior_builder.get_all_priors(
-        fci_skeleton_path=config['fci_skeleton_path'],  # Pure FCI for hard mask
+        fci_skeleton_path=config.get('fci_skeleton_path'),  # Pure FCI for hard mask (can be None if manual)
         llm_direction_path=config.get('llm_direction_path'),  # FCI+LLM for soft direction (optional)
-        use_llm_prior=config.get('use_llm_prior', True)  # Whether to use LLM prior
+        use_llm_prior=config.get('use_llm_prior', True),  # Whether to use LLM prior
+        manual_skeleton=manual_skeleton  # Manual skeleton specification (for Tuebingen)
     )
+    
+    # Check if custom direction prior is provided (for experiments or LLM)
+    if 'forward_bias' in config:
+        # Create biased direction prior for experiment
+        print(f"\n[EXPERIMENT MODE] Creating biased direction prior:")
+        print(f"  Forward (Altitude->Temp): {config['forward_bias']:.1f}")
+        print(f"  Backward (Temp->Alt): {1-config['forward_bias']:.1f}")
+        
+        direction_prior = torch.zeros_like(priors['direction_prior'])
+        forward_bias = config['forward_bias']
+        backward_bias = 1.0 - forward_bias
+        
+        # Apply bias to manual skeleton edges
+        for var_a, var_b in manual_skeleton:
+            states_a = var_structure['var_to_states'][var_a]
+            states_b = var_structure['var_to_states'][var_b]
+            
+            # Forward direction
+            for i in states_a:
+                for j in states_b:
+                    direction_prior[i, j] = forward_bias
+            
+            # Backward direction
+            for i in states_b:
+                for j in states_a:
+                    direction_prior[i, j] = backward_bias
+        
+        priors['direction_prior'] = direction_prior
+    
+    # NEW: Check if LLM weights are provided (方案 A: 温和初始化)
+    elif 'llm_forward_weight' in config and 'llm_backward_weight' in config:
+        # Apply LLM-suggested weights
+        print(f"\n[LLM PRIOR] Applying LLM-suggested direction weights:")
+        print(f"  {config.get('llm_var_x', 'X')} -> {config.get('llm_var_y', 'Y')}: {config['llm_forward_weight']:.2f}")
+        print(f"  {config.get('llm_var_y', 'Y')} -> {config.get('llm_var_x', 'X')}: {config['llm_backward_weight']:.2f}")
+        print(f"  Advantage: {abs(config['llm_forward_weight'] - config['llm_backward_weight']):.2f}")
+        
+        direction_prior = torch.zeros_like(priors['direction_prior'])
+        
+        # Apply LLM weights to manual skeleton edges
+        if manual_skeleton:
+            for var_a, var_b in manual_skeleton:
+                states_a = var_structure['var_to_states'][var_a]
+                states_b = var_structure['var_to_states'][var_b]
+                
+                # Forward direction (X -> Y)
+                for i in states_a:
+                    for j in states_b:
+                        direction_prior[i, j] = config['llm_forward_weight']
+                
+                # Backward direction (Y -> X)
+                for i in states_b:
+                    for j in states_a:
+                        direction_prior[i, j] = config['llm_backward_weight']
+        
+        priors['direction_prior'] = direction_prior
+        print(f"[LLM PRIOR] Direction prior updated with LLM weights")
     
     # === 3. INITIALIZE MODEL ===
     print("\n[3/6] Initializing Model...")
@@ -226,9 +288,12 @@ def train_complete(config: dict):
     optimizer = optim.Adam(model.parameters(), lr=config['learning_rate'])
     
     # Initialize evaluator
+    # For datasets with manual ground truth (like Tuebingen), pass ground_truth_edges directly
+    ground_truth_edges = config.get('ground_truth_edges', None)
     evaluator = CausalGraphEvaluator(
-        ground_truth_path=config['ground_truth_path'],
-        var_structure=var_structure
+        ground_truth_path=config.get('ground_truth_path'),
+        var_structure=var_structure,
+        ground_truth_edges=ground_truth_edges
     )
     
     # === 6. TRAINING LOOP WITH MONITORING ===
@@ -274,6 +339,25 @@ def train_complete(config: dict):
         # === BACKWARD PASS ===
         optimizer.zero_grad()
         losses['total'].backward()
+        
+        # === GRADIENT MONITORING (for symmetry breaking analysis) ===
+        # Compute gradient magnitudes for both directions
+        if (epoch + 1) % config['monitor_interval'] == 0:
+            with torch.no_grad():
+                # Get gradients
+                grad = model.raw_adj.grad
+                
+                # For Tuebingen: determine bin count from var_structure
+                n_bins = var_structure['n_states'] // var_structure['n_variables']
+                # Altitude (states 0:n_bins), Temperature (states n_bins:2*n_bins)
+                grad_altitude_to_temp = grad[0:n_bins, n_bins:2*n_bins]  # Forward direction
+                grad_temp_to_altitude = grad[n_bins:2*n_bins, 0:n_bins]  # Backward direction
+                
+                # Compute average gradient magnitude (L2 norm)
+                grad_forward_mag = grad_altitude_to_temp.abs().mean().item()
+                grad_backward_mag = grad_temp_to_altitude.abs().mean().item()
+                grad_ratio = grad_forward_mag / grad_backward_mag if grad_backward_mag > 0 else float('inf')
+        
         optimizer.step()
         
         # Clamp weights
@@ -317,6 +401,10 @@ def train_complete(config: dict):
                 print(f"    Recon:        {losses['reconstruction'].item():8.4f}")
                 print(f"    Group Lasso:  {losses['weighted_group_lasso'].item():8.4f}")
                 print(f"    Cycle:        {losses['cycle_consistency'].item():8.4f}")
+                print(f"  Gradient Analysis (Symmetry Breaking):")
+                print(f"    Forward Grad (Alt->Temp):  {grad_forward_mag:8.6f}")
+                print(f"    Backward Grad (Temp->Alt): {grad_backward_mag:8.6f}")
+                print(f"    Ratio (Forward/Backward):  {grad_ratio:8.4f} [Want: >1 or <1, NOT ~1]")
                 print(f"  Direction Learning:")
                 print(f"    Bidirectional: {bidir_stats['bidirectional']:3d} / {bidir_stats['total_pairs']:3d} "
                       f"({bidir_stats['bidirectional_ratio']*100:5.1f}%) [Want: DOWN]")

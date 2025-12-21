@@ -112,12 +112,12 @@ class CausalDataLoader:
         
         Supports:
         - Discrete data: One-hot encoded states (binary values)
-        - Continuous data: Raw values (will be normalized if needed)
+        - Continuous data: Raw values -> discretize -> one-hot encode
         
         Returns:
             Tensor of shape (N_samples, n_states)
             - For discrete: Binary values, exactly n_variables ones per row
-            - For continuous: Raw continuous values
+            - For continuous: One-hot encoded after discretization
         """
         print("\n" + "=" * 70)
         print("LOADING OBSERVATIONAL DATA")
@@ -130,40 +130,71 @@ class CausalDataLoader:
         id_columns = ['sample_id', 'patient_id', 'subject_id', 'id', 'index']
         state_columns = [col for col in df.columns if col not in id_columns]
         
-        # Verify all states are present
-        if len(state_columns) != self.var_structure['n_states']:
-            print(f"WARNING: Expected {self.var_structure['n_states']} states, found {len(state_columns)}")
-            print(f"This may be normal for continuous data.")
+        # Check data format
+        data_format = self.metadata.get('data_format', 'unknown')
         
-        # Convert to tensor directly
-        data_matrix = torch.tensor(df[state_columns].values, dtype=torch.float32)
+        # CRITICAL: Handle continuous data with discretization + one-hot conversion
+        if data_format == 'one_hot_csv' and len(state_columns) < self.var_structure['n_states']:
+            # This is continuous data that needs discretization + one-hot encoding
+            print(f"Detected continuous data (columns: {len(state_columns)}, expected states: {self.var_structure['n_states']})")
+            print(f"Applying discretization + one-hot encoding...")
+            
+            from .data_preprocessor import DataPreprocessor
+            
+            # Get discretization parameters from metadata
+            n_bins = self.metadata.get('n_bins', 5)
+            strategy = self.metadata.get('discretization_strategy', 'quantile')
+            
+            # Step 1: Discretize continuous data
+            preprocessor = DataPreprocessor(data_type='continuous', strategy=strategy)
+            df_discrete, _ = preprocessor.fit_transform(df[state_columns], n_bins=n_bins, strategy=strategy)
+            
+            # Step 2: Convert to one-hot encoding
+            # For each variable, create n_bins binary columns
+            onehot_columns = []
+            for var_name in state_columns:
+                for bin_idx in range(n_bins):
+                    # Create binary column: 1 if this sample is in this bin, 0 otherwise
+                    col_name = f"{var_name}_bin{bin_idx}"
+                    onehot_columns.append((df_discrete[var_name] == bin_idx).astype(int))
+            
+            # Combine into one-hot matrix
+            df_onehot = pd.concat(onehot_columns, axis=1)
+            df_onehot.columns = [f"{var}_bin{i}" for var in state_columns for i in range(n_bins)]
+            
+            print(f"[OK] Discretization + One-hot encoding complete")
+            print(f"  Original shape: {df[state_columns].shape}")
+            print(f"  One-hot shape: {df_onehot.shape}")
+            
+            # Convert to tensor
+            data_matrix = torch.tensor(df_onehot.values, dtype=torch.float32)
+            
+        else:
+            # Already in correct format (discrete one-hot)
+            # Verify all states are present
+            if len(state_columns) != self.var_structure['n_states']:
+                print(f"WARNING: Expected {self.var_structure['n_states']} states, found {len(state_columns)}")
+            
+            # Convert to tensor directly
+            data_matrix = torch.tensor(df[state_columns].values, dtype=torch.float32)
         
         # Verify data integrity
         n_samples = data_matrix.shape[0]
         
-        print(f"Samples loaded: {n_samples}")
+        print(f"\nSamples loaded: {n_samples}")
         print(f"Matrix shape: {data_matrix.shape}")
         
-        # Check data format
-        data_format = self.metadata.get('data_format', 'unknown')
+        # Verify one-hot structure
+        states_per_sample = data_matrix.sum(dim=1)
+        print(f"States per sample: {states_per_sample.mean().item():.1f} (expected: {self.var_structure['n_variables']})")
+        print(f"Total facts: {int(data_matrix.sum().item())}")
+        print(f"Matrix density: {data_matrix.mean().item() * 100:.2f}%")
         
-        if data_format == 'one_hot_csv':
-            # Discrete data - verify one-hot structure
-            states_per_sample = data_matrix.sum(dim=1)
-            print(f"States per sample: {states_per_sample.mean().item():.1f} (expected: {self.var_structure['n_variables']})")
-            print(f"Total facts: {int(data_matrix.sum().item())}")
-            print(f"Matrix density: {data_matrix.mean().item() * 100:.2f}%")
-            
-            # Sanity check: each sample should have exactly n_variables states active
-            if not torch.allclose(states_per_sample, torch.tensor(float(self.var_structure['n_variables'])), atol=0.1):
-                print("WARNING: Some samples don't have exactly one state per variable")
-                print(f"  Min: {states_per_sample.min().item()}")
-                print(f"  Max: {states_per_sample.max().item()}")
-        
-        elif data_format == 'continuous_csv':
-            # Continuous data
-            print(f"Value range: [{data_matrix.min().item():.4f}, {data_matrix.max().item():.4f}]")
-            print(f"Mean: {data_matrix.mean().item():.4f}, Std: {data_matrix.std().item():.4f}")
+        # Sanity check: each sample should have exactly n_variables states active
+        if not torch.allclose(states_per_sample, torch.tensor(float(self.var_structure['n_variables'])), atol=0.1):
+            print("WARNING: Some samples don't have exactly one state per variable")
+            print(f"  Min: {states_per_sample.min().item()}")
+            print(f"  Max: {states_per_sample.max().item()}")
         
         return data_matrix
     
@@ -254,6 +285,9 @@ if __name__ == "__main__":
     for i in [0, 10, 50]:
         info = loader.get_state_info(i)
         print(f"  State {i}: {info['state_name']} (var: {info['variable']}, normal: {info['is_normal']})")
+
+
+
 
 
 

@@ -45,6 +45,66 @@ class PriorBuilder:
         print(f"Variables: {var_structure['n_variables']}")
         print(f"States: {self.n_states}")
     
+    def build_skeleton_mask_from_manual(self, manual_edges: List[Tuple[str, str]]) -> torch.Tensor:
+        """
+        Build skeleton mask from manually specified edges (for simple datasets like Tuebingen)
+        
+        Args:
+            manual_edges: List of (var_a, var_b) tuples representing undirected edges
+        
+        Returns:
+            Binary mask (n_states, n_states) where 1 = allowed, 0 = forbidden
+            
+        Logic:
+            - For each manual edge (A, B), enable both A->B and B->A blocks
+            - This creates a SYMMETRIC mask, letting the model learn the direction
+        """
+        print("\n" + "=" * 70)
+        print("BUILDING SKELETON MASK FROM MANUAL SPECIFICATION")
+        print("=" * 70)
+        
+        # Initialize mask to zeros (nothing allowed)
+        skeleton_mask = torch.zeros(self.n_states, self.n_states)
+        
+        print(f"Manual edges: {len(manual_edges)}")
+        
+        for var_a, var_b in manual_edges:
+            # Get state indices for both variables
+            if var_a not in self.var_structure['var_to_states']:
+                print(f"Warning: Variable {var_a} not found in structure")
+                continue
+            if var_b not in self.var_structure['var_to_states']:
+                print(f"Warning: Variable {var_b} not found in structure")
+                continue
+            
+            states_a = self.var_structure['var_to_states'][var_a]
+            states_b = self.var_structure['var_to_states'][var_b]
+            
+            # Enable BOTH directions (symmetric)
+            # A -> B
+            for i in states_a:
+                for j in states_b:
+                    skeleton_mask[i, j] = 1
+            
+            # B -> A
+            for i in states_b:
+                for j in states_a:
+                    skeleton_mask[i, j] = 1
+            
+            print(f"  Enabled: {var_a} <-> {var_b} (bidirectional, {len(states_a)}x{len(states_b)} states)")
+        
+        # Calculate statistics
+        total_possible = self.n_states * self.n_states
+        allowed = int(skeleton_mask.sum().item())
+        
+        print(f"\nSkeleton mask statistics:")
+        print(f"  Edges processed: {len(manual_edges)}")
+        print(f"  Allowed connections: {allowed} / {total_possible} ({allowed/total_possible*100:.2f}%)")
+        print(f"  Forbidden connections: {total_possible - allowed}")
+        print(f"  [IMPORTANT] Mask is SYMMETRIC - model must learn direction from data")
+        
+        return skeleton_mask
+    
     def build_skeleton_mask_from_fci(self, fci_csv_path: str) -> torch.Tensor:
         """
         Build skeleton mask from FCI results
@@ -336,27 +396,39 @@ class PriorBuilder:
         
         return blocks
     
-    def get_all_priors(self, fci_skeleton_path: str, llm_direction_path: str = None, 
-                      use_llm_prior: bool = True) -> Dict[str, torch.Tensor]:
+    def get_all_priors(self, fci_skeleton_path: str = None, llm_direction_path: str = None, 
+                      use_llm_prior: bool = True, manual_skeleton: List[Tuple[str, str]] = None) -> Dict[str, torch.Tensor]:
         """
         Convenience method to build all priors at once
         
-        IMPORTANT: Uses TWO separate CSV files:
-        - fci_skeleton_path: Pure FCI results for HARD skeleton mask
-        - llm_direction_path: FCI+LLM hybrid results for SOFT direction prior (optional)
+        Supports TWO modes:
+        1. FCI mode: Uses FCI results (and optionally LLM)
+        2. Manual mode: Uses manually specified skeleton (for simple datasets like Tuebingen)
         
         Args:
             fci_skeleton_path: Path to pure FCI edges (e.g., edges_FCI_20251207_230824.csv)
+                              Can be None if using manual_skeleton
             llm_direction_path: Path to FCI+LLM edges (e.g., edges_Hybrid_FCI_LLM_20251207_230956.csv)
                                Can be None if use_llm_prior=False
             use_llm_prior: Whether to use LLM direction prior (default: True)
                           If False, uses uniform initialization (0.5 for all allowed edges)
+            manual_skeleton: List of (var_a, var_b) tuples for manual skeleton specification
+                            If provided, FCI is skipped
         
         Returns:
             Dictionary with all prior structures
         """
-        # Build skeleton from PURE FCI (hard constraint)
-        skeleton_mask = self.build_skeleton_mask_from_fci(fci_skeleton_path)
+        # Build skeleton mask
+        if manual_skeleton is not None:
+            # Manual mode: Use manually specified skeleton
+            print("\n[MODE: MANUAL SKELETON]")
+            skeleton_mask = self.build_skeleton_mask_from_manual(manual_skeleton)
+        elif fci_skeleton_path is not None:
+            # FCI mode: Use FCI results
+            print("\n[MODE: FCI SKELETON]")
+            skeleton_mask = self.build_skeleton_mask_from_fci(fci_skeleton_path)
+        else:
+            raise ValueError("Must provide either fci_skeleton_path or manual_skeleton")
         
         # Build direction prior
         if use_llm_prior and llm_direction_path:
@@ -367,12 +439,12 @@ class PriorBuilder:
             # Uniform initialization: 0.5 for all allowed edges, 0.0 for forbidden
             direction_prior = skeleton_mask * 0.5
             print("\n[NO LLM PRIOR - UNIFORM INITIALIZATION]")
-            print("All FCI-allowed edges initialized with weight 0.5")
+            print("All allowed edges initialized with weight 0.5")
         
         # Build penalty weights for Normal state handling
         penalty_weights = self.build_normal_penalty_weights()
         
-        # Build blocks ONLY for FCI-allowed edges
+        # Build blocks ONLY for allowed edges
         blocks = self.build_block_structure(skeleton_mask)
         
         return {
