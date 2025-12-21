@@ -142,7 +142,12 @@ def compute_sparsity_metrics(adjacency: torch.Tensor,
     total_allowed = int(skeleton_mask.sum().item())
     adjacency_np = adjacency.detach().cpu().numpy()
     active_connections = (adjacency_np > threshold).sum()
-    overall_sparsity = (total_allowed - active_connections) / total_allowed
+    
+    # Handle edge case: no allowed connections
+    if total_allowed > 0:
+        overall_sparsity = (total_allowed - active_connections) / total_allowed
+    else:
+        overall_sparsity = 0.0
     
     # Block-level sparsity
     active_blocks = 0
@@ -151,7 +156,11 @@ def compute_sparsity_metrics(adjacency: torch.Tensor,
         if block_weights.mean().item() > threshold:
             active_blocks += 1
     
-    block_sparsity = (len(block_structure) - active_blocks) / len(block_structure)
+    # Handle edge case: no blocks
+    if len(block_structure) > 0:
+        block_sparsity = (len(block_structure) - active_blocks) / len(block_structure)
+    else:
+        block_sparsity = 0.0
     
     # Weight distribution
     active_weights = adjacency_np[adjacency_np > threshold]
@@ -409,8 +418,12 @@ def train_complete(config: dict):
                 print(f"  Direction Learning:")
                 print(f"    Bidirectional: {bidir_stats['bidirectional']:3d} / {bidir_stats['total_pairs']:3d} "
                       f"({bidir_stats['bidirectional_ratio']*100:5.1f}%) [Want: DOWN]")
+                if bidir_stats['total_pairs'] > 0:
+                    uni_pct = bidir_stats['unidirectional']/bidir_stats['total_pairs']*100
+                else:
+                    uni_pct = 0.0
                 print(f"    Unidirectional: {bidir_stats['unidirectional']:3d} / {bidir_stats['total_pairs']:3d} "
-                      f"({bidir_stats['unidirectional']/bidir_stats['total_pairs']*100:5.1f}%) [Want: UP]")
+                      f"({uni_pct:5.1f}%) [Want: UP]")
                 print(f"  Sparsity:")
                 print(f"    Overall:      {sparsity_stats['overall_sparsity']*100:5.1f}% "
                       f"({sparsity_stats['active_connections']}/{sparsity_stats['total_allowed']})")
