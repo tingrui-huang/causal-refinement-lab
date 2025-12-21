@@ -221,7 +221,7 @@ def compute_dynamic_threshold(adj, percentile=3.0):
     return threshold
 
 
-def analyze_direction(adj, n_bins, gt_direction):
+def analyze_direction(adj, n_bins, gt_direction, llm_forward_weight=0.5, llm_backward_weight=0.5):
     """
     Analyze learned direction from adjacency matrix using diff_ratio mechanism
     
@@ -229,11 +229,14 @@ def analyze_direction(adj, n_bins, gt_direction):
     1. Asymmetry is RELATIVE (A stronger than B)
     2. But use THRESHOLD to avoid both too weak or both too strong
     3. Use diff_ratio to determine direction confidence
+    4. In uncertain zone (0.95-1.05), use LLM prior as tiebreaker
     
     Args:
         adj: Adjacency matrix (numpy array)
         n_bins: Number of bins per variable
         gt_direction: Ground truth direction (1: x->y, -1: y->x)
+        llm_forward_weight: LLM's weight for x->y direction (default: 0.5)
+        llm_backward_weight: LLM's weight for y->x direction (default: 0.5)
     
     Returns:
         Dictionary with direction analysis
@@ -248,20 +251,25 @@ def analyze_direction(adj, n_bins, gt_direction):
     backward_strength = y_to_x.sum()
     
     # Compute diff_ratio (权重竞争逻辑)
-    # 伪代码：权重差 / (反向权重 + 1e-6) 避免除零
     diff_ratio = forward_strength / (backward_strength + 1e-6)
     
-    # 判断学习到的方向（基于 diff_ratio 阈值）
-    # NOTE: Changed from 1.1/0.9 to 1.0 - with LLM initialization, any deviation from 1.0 is real signal
-    if diff_ratio > 1.0:  # 如果正向比反向强（任何偏离 1.0 都算）
+    # 【黄金逻辑】带缓冲区的 PK 制 (1.02/0.98 甜点)
+    # 1. 强信号区：数据说了算 (防止 LLM 幻觉)
+    if diff_ratio > 1.02:  # 只要比 1.0 多 2%，就信数据
         learned_direction = 1  # x->y
-        confidence = "strong" if diff_ratio > 2.0 else "weak"
-    elif diff_ratio < 1.0:  # 如果反向比正向强（任何偏离 1.0 都算）
+        confidence = "strong" if diff_ratio > 1.1 else "weak"
+    elif diff_ratio < 0.98:  # 只要比 1.0 少 2%，就信数据
         learned_direction = -1  # y->x
-        confidence = "strong" if diff_ratio < 0.5 else "weak"
-    else:  # diff_ratio == 1.0 (完全相等，极少见)
-        learned_direction = 0  # bidirectional (实在分不出胜负)
-        confidence = "bidirectional"
+        confidence = "strong" if diff_ratio < 0.9 else "weak"
+    
+    # 2. 模糊区 (0.98 - 1.02)：数据也是懵的，听 LLM 的
+    else:
+        if llm_forward_weight > llm_backward_weight:
+            learned_direction = 1
+            confidence = "llm_guided"
+        else:
+            learned_direction = -1
+            confidence = "llm_guided"
     
     # Check correctness against ground truth
     if learned_direction == 0:
@@ -321,11 +329,12 @@ def compute_shd(learned_adj, ground_truth_edges, var_names):
                 # Compute ratio (谁强谁上机制)
                 ratio = forward_strength / (backward_strength + 1e-6)
                 
-                # Only add edge if one direction is stronger (changed from 1.1 to 1.0 with LLM)
-                if ratio > 1.0:  # Forward direction wins
+                # Use buffered PK mechanism (2% buffer zone - golden ratio)
+                if ratio > 1.02:  # Forward direction wins (2% threshold)
                     learned_edges.add((var_names[i], var_names[j]))
-                elif ratio < 1.0:  # Backward direction wins (handled in j->i iteration)
+                elif ratio < 0.98:  # Backward direction wins (handled in j->i iteration)
                     pass  # Will be added when we check j->i
+                # else: 0.98 <= ratio <= 1.02: uncertain zone, no edge added (will rely on direction_analysis with LLM)
     
     # Convert ground truth to set
     gt_edges = set(tuple(edge) for edge in ground_truth_edges)
@@ -450,8 +459,14 @@ def run_single_pair(pair_id, csv_path, gt_direction, config_template, n_bins=5):
         print(f"\nDynamic Threshold (3% of total weight, for reference): {dynamic_threshold:.6f}")
         print(f"Note: SHD uses ratio-based 'winner-takes-all' (10% rule), not threshold")
         
-        # Analyze direction
-        direction_analysis = analyze_direction(adj, n_bins, gt_direction)
+        # Analyze direction (pass LLM weights for tiebreaking in uncertain zone)
+        direction_analysis = analyze_direction(
+            adj, 
+            n_bins, 
+            gt_direction,
+            llm_forward_weight=config.get('llm_forward_weight', 0.5),
+            llm_backward_weight=config.get('llm_backward_weight', 0.5)
+        )
         
         # Compute variable-level adjacency for SHD
         # Use SUM (not mean) to get total strength for ratio comparison
@@ -605,7 +620,7 @@ def main():
         
         # Hyperparameters (VALIDATED CONFIGURATION)
         'learning_rate': 0.05,
-        'n_epochs': 200,
+        'n_epochs': 200,  # 300 too long, causes overfitting and amplifies noise
         'n_hops': 1,
         'batch_size': None,
         'lambda_group': 0.0,  # No sparsity penalty

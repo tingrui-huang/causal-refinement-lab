@@ -241,7 +241,8 @@ def train_complete(config: dict):
     
     # NEW: Check if LLM weights are provided (方案 A: 温和初始化)
     elif 'llm_forward_weight' in config and 'llm_backward_weight' in config:
-        # Apply LLM-suggested weights
+        # Apply LLM-suggested weights to initialization
+        # This gives model a gentle push (e.g., 0.6 vs 0.4) to help break symmetry
         print(f"\n[LLM PRIOR] Applying LLM-suggested direction weights:")
         print(f"  {config.get('llm_var_x', 'X')} -> {config.get('llm_var_y', 'Y')}: {config['llm_forward_weight']:.2f}")
         print(f"  {config.get('llm_var_y', 'Y')} -> {config.get('llm_var_x', 'X')}: {config['llm_backward_weight']:.2f}")
