@@ -91,9 +91,11 @@ def train_complete(config: dict):
         var_structure=var_structure
     )
     
-    # === BASELINE: FCI UNDIRECTED RATIO ===
-    # Load FCI results to compute baseline undirected ratio
-    fci_baseline_undirected_ratio = None
+    # === BASELINE: FCI UNRESOLVED RATIO ===
+    # Load FCI results to compute baseline unresolved ratio
+    # Unresolved = all edges where FCI didn't determine a unique direction
+    # This includes: bidirected, partial, undirected, tail-tail (everything except directed)
+    fci_baseline_unresolved_ratio = None
     if config.get('fci_skeleton_path'):
         try:
             import sys
@@ -104,22 +106,24 @@ def train_complete(config: dict):
             # Parse FCI CSV to get edge type breakdown
             fci_directed, fci_undirected, edge_counts = parse_fci_csv(config['fci_skeleton_path'])
             
-            # Calculate undirected ratio
+            # Calculate unresolved ratio
+            # Unresolved = ALL non-directed edges (bidirected + partial + undirected + tail-tail)
             total_edges = sum(edge_counts.values())
-            undirected_edges = edge_counts.get('undirected', 0) + edge_counts.get('partial', 0) + edge_counts.get('tail-tail', 0)
-            fci_baseline_undirected_ratio = undirected_edges / total_edges if total_edges > 0 else 0
+            directed_edges = edge_counts.get('directed', 0)
+            unresolved_edges = total_edges - directed_edges  # Everything except directed
+            fci_baseline_unresolved_ratio = unresolved_edges / total_edges if total_edges > 0 else 0
             
             print("\n" + "=" * 70)
             print("FCI BASELINE (No LLM, No Training)")
             print("=" * 70)
             print(f"Total FCI edges: {total_edges}")
-            print(f"  Directed:            {edge_counts.get('directed', 0):3d}  ({edge_counts.get('directed', 0)/total_edges*100:.1f}%)")
-            print(f"  Undirected/Partial:  {undirected_edges:3d}  ({fci_baseline_undirected_ratio*100:.1f}%)")
-            print(f"    - Undirected:      {edge_counts.get('undirected', 0):3d}")
-            print(f"    - Partial:         {edge_counts.get('partial', 0):3d}")
-            print(f"    - Tail-tail:       {edge_counts.get('tail-tail', 0):3d}")
-            print(f"  Bidirected:          {edge_counts.get('bidirected', 0):3d}  (latent confounders)")
-            print(f"\nFCI Undirected Ratio (Baseline): {fci_baseline_undirected_ratio*100:.1f}%")
+            print(f"  Directed (->):       {directed_edges:3d}  ({directed_edges/total_edges*100:.1f}%) [direction resolved]")
+            print(f"  Unresolved:          {unresolved_edges:3d}  ({fci_baseline_unresolved_ratio*100:.1f}%) [direction NOT resolved]")
+            print(f"    - Bidirected (<->): {edge_counts.get('bidirected', 0):3d}")
+            print(f"    - Partial (o->):    {edge_counts.get('partial', 0):3d}")
+            print(f"    - Undirected (o-o): {edge_counts.get('undirected', 0):3d}")
+            print(f"    - Tail-tail (--):   {edge_counts.get('tail-tail', 0):3d}")
+            print(f"\nFCI Unresolved Ratio (Baseline): {fci_baseline_unresolved_ratio*100:.1f}%")
             print("=" * 70)
         except Exception as e:
             print(f"\n[WARN] Could not compute FCI baseline: {e}")
@@ -335,11 +339,12 @@ def train_complete(config: dict):
         f.write(f"  Cycle Consistency: {history['loss_cycle'][-1]:.4f}\n\n")
         
         f.write("Symmetry Breaking (Direction Learning):\n")
-        if fci_baseline_undirected_ratio is not None:
-            f.write(f"  FCI Undirected Ratio (Baseline):  {fci_baseline_undirected_ratio*100:.1f}% (edges without direction)\n")
-            f.write(f"  After LLM Prior (Epoch 0):        {history['unresolved_ratio'][0]*100:.1f}% (symmetric pairs)\n")
-            f.write(f"  After Training (Final):           {history['unresolved_ratio'][-1]*100:.1f}% (symmetric pairs)\n")
-            f.write(f"  Training Improvement:             {(history['unresolved_ratio'][0] - history['unresolved_ratio'][-1])*100:+.1f}%\n\n")
+        if fci_baseline_unresolved_ratio is not None:
+            f.write(f"  FCI Baseline (edges without direction):     {fci_baseline_unresolved_ratio*100:.1f}%\n")
+            # f.write(f"  After LLM Prior (Epoch 0):        {history['unresolved_ratio'][0]*100:.1f}% (symmetric pairs)\n")
+            f.write(f"  After Training (Final, symmetric pairs):    {history['unresolved_ratio'][-1]*100:.1f}%\n")
+            total_improvement = (fci_baseline_unresolved_ratio - history['unresolved_ratio'][-1]) * 100
+            f.write(f"  Total Improvement (FCI → Final): {total_improvement:+.1f}%\n\n")
         else:
             f.write(f"  Initial Unresolved Ratio: {history['unresolved_ratio'][0]*100:.1f}%\n")
             f.write(f"  Final Unresolved Ratio: {history['unresolved_ratio'][-1]*100:.1f}%\n")
@@ -365,7 +370,7 @@ def train_complete(config: dict):
         'model': model,
         'metrics': metrics,
         'history': history,
-        'fci_baseline_undirected_ratio': fci_baseline_undirected_ratio
+        'fci_baseline_unresolved_ratio': fci_baseline_unresolved_ratio
     }
     
     return results
@@ -409,7 +414,7 @@ if __name__ == "__main__":
     model = results['model']
     metrics = results['metrics']
     history = results['history']
-    fci_baseline_undirected_ratio = results['fci_baseline_undirected_ratio']
+    fci_baseline_unresolved_ratio = results['fci_baseline_unresolved_ratio']
     
     # Print summary
     print("\n" + "=" * 70)
@@ -422,11 +427,12 @@ if __name__ == "__main__":
     print(f"  Cycle:          {history['loss_cycle'][0]:.4f} -> {history['loss_cycle'][-1]:.4f}")
     
     print("\nSymmetry Breaking (Direction Learning):")
-    if fci_baseline_undirected_ratio is not None:
-        print(f"  FCI Undirected Ratio (Baseline):  {fci_baseline_undirected_ratio*100:.1f}% (edges without direction)")
-        print(f"  After LLM Prior (Epoch 0):        {history['unresolved_ratio'][0]*100:.1f}% (symmetric pairs)")
-        print(f"  After Training (Final):           {history['unresolved_ratio'][-1]*100:.1f}% (symmetric pairs)")
-        print(f"  Training Improvement: {history['unresolved_ratio'][0]*100:.1f}% -> {history['unresolved_ratio'][-1]*100:.1f}% ({(history['unresolved_ratio'][0] - history['unresolved_ratio'][-1])*100:+.1f}%)")
+    if fci_baseline_unresolved_ratio is not None:
+        print(f"  FCI Baseline (edges without direction):     {fci_baseline_unresolved_ratio*100:.1f}%")
+        # print(f"  After LLM Prior (Epoch 0):        {history['unresolved_ratio'][0]*100:.1f}% (symmetric pairs)")
+        print(f"  After Training (Final, symmetric pairs):    {history['unresolved_ratio'][-1]*100:.1f}%")
+        total_improvement = (fci_baseline_unresolved_ratio - history['unresolved_ratio'][-1]) * 100
+        print(f"  Total Improvement (FCI → Final): {total_improvement:+.1f}%")
     else:
         print(f"  Unresolved Ratio: {history['unresolved_ratio'][0]*100:.1f}% -> {history['unresolved_ratio'][-1]*100:.1f}%")
         change = (history['unresolved_ratio'][-1] - history['unresolved_ratio'][0]) * 100

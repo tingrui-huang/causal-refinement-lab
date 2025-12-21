@@ -23,7 +23,7 @@ NEURO_SYMBOLIC_DIR = PROJECT_ROOT / 'Neuro-Symbolic-Reasoning'
 # DATASET SELECTION
 # ============================================================================
 # Options: 'alarm', 'insurance', 'tuebingen_pair1', etc.
-DATASET = 'insurance'
+DATASET = 'alarm'
 
 # ============================================================================
 # STEP 1: FCI ALGORITHM SETTINGS
@@ -47,7 +47,7 @@ VALIDATION_ALPHA = 0.01
 #   - 'gpt-3.5-turbo' (GPT-3.5)
 #   - 'gpt-4' (GPT-4)
 #   - 'zephyr-7b' (Zephyr)
-LLM_MODEL = 'zephyr-7b'  # Set to None for FCI-only pipeline
+LLM_MODEL = 'gpt-3.5-turbo'  # Set to None for FCI-only pipeline
 
 # Use LLM prior for direction initialization in neural training?
 USE_LLM_PRIOR = True if LLM_MODEL else False
@@ -66,8 +66,8 @@ N_HOPS = 1  # Number of reasoning hops (1 = single-hop)
 BATCH_SIZE = None  # None = full batch
 
 # Regularization
-LAMBDA_GROUP_LASSO = 0.001  # Group lasso penalty weight
-LAMBDA_CYCLE = 0.05    # Cycle consistency penalty weight
+LAMBDA_GROUP_LASSO = 0.01  # Group lasso penalty weight
+LAMBDA_CYCLE = 0.005    # Cycle consistency penalty weight
 # alarm is 0.01, 0.005, insurance is 0.001,0.05, different datasets have different configurations.
 
 

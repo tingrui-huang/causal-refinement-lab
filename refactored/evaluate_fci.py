@@ -88,12 +88,17 @@ def parse_fci_csv(fci_csv_path):
 
 def compute_fci_unresolved_ratio(fci_csv_path):
     """
-    Compute unresolved (symmetric) ratio from FCI edge list
+    Compute unresolved ratio from FCI edge list
     
-    Unresolved ratio = (# of unresolved pairs) / (# of total unique pairs)
+    Unresolved ratio = (# of non-directed edges) / (# of total edges)
     
-    An unresolved pair means both A->B and B->A exist in the edge list,
-    indicating the direction has not been determined yet (symmetric/unresolved).
+    Unresolved edges are those where FCI didn't determine a unique direction:
+    - Bidirected (<->): latent confounders
+    - Partial (o->): ambiguous direction
+    - Undirected (o-o): completely ambiguous
+    - Tail-tail (--): no clear direction
+    
+    This is the FCI baseline that LLM and neural training aim to reduce.
     
     Args:
         fci_csv_path: Path to FCI edges CSV
@@ -101,51 +106,23 @@ def compute_fci_unresolved_ratio(fci_csv_path):
     Returns:
         dict: Statistics including unresolved_ratio
     """
-    df = pd.read_csv(fci_csv_path)
+    # Parse FCI CSV to get edge type breakdown
+    fci_directed, fci_undirected, edge_counts = parse_fci_csv(fci_csv_path)
     
-    # Determine column names
-    if 'Source' in df.columns and 'Target' in df.columns:
-        source_col, target_col = 'Source', 'Target'
-    elif 'source' in df.columns and 'target' in df.columns:
-        source_col, target_col = 'source', 'target'
-    else:
-        source_col, target_col = df.columns[0], df.columns[1]
+    # Calculate unresolved ratio
+    # Unresolved = ALL non-directed edges (bidirected + partial + undirected + tail-tail)
+    total_edges = sum(edge_counts.values())
+    directed_edges = edge_counts.get('directed', 0)
+    unresolved_edges = total_edges - directed_edges  # Everything except directed
     
-    # Build edge set (directed)
-    edges = set()
-    for _, row in df.iterrows():
-        source = row[source_col]
-        target = row[target_col]
-        edges.add((source, target))
-    
-    # Find all unique variable pairs
-    all_pairs = set()
-    for source, target in edges:
-        pair = tuple(sorted([source, target]))
-        all_pairs.add(pair)
-    
-    # Count unresolved (symmetric) pairs
-    unresolved_count = 0  # Both directions exist (symmetric/unresolved)
-    resolved_count = 0     # Only one direction exists (resolved)
-    
-    for var_a, var_b in all_pairs:
-        has_forward = (var_a, var_b) in edges
-        has_backward = (var_b, var_a) in edges
-        
-        if has_forward and has_backward:
-            unresolved_count += 1  # Symmetric/unresolved
-        else:
-            resolved_count += 1     # Resolved to one direction
-    
-    total_pairs = len(all_pairs)
-    unresolved_ratio = unresolved_count / total_pairs if total_pairs > 0 else 0
+    unresolved_ratio = unresolved_edges / total_edges if total_edges > 0 else 0
     
     return {
-        'unresolved_count': unresolved_count,
-        'resolved_count': resolved_count,
-        'total_pairs': total_pairs,
+        'unresolved_count': unresolved_edges,
+        'resolved_count': directed_edges,
+        'total_edges': total_edges,
         'unresolved_ratio': unresolved_ratio,
-        'total_edges': len(edges)
+        'edge_type_breakdown': edge_counts
     }
 
 
@@ -278,17 +255,23 @@ def evaluate_fci(fci_csv_path, ground_truth_path, output_dir=None):
     print(f"Incorrectly Oriented: {incorrectly_oriented}")
     print(f"\nOrientation Accuracy: {orientation_accuracy*100:.1f}%")
     
-    # === 3. UNRESOLVED (SYMMETRIC) RATIO ===
+    # === 3. UNRESOLVED RATIO (FCI BASELINE) ===
     unresolved_stats = compute_fci_unresolved_ratio(fci_csv_path)
     
     print("\n" + "=" * 80)
-    print("UNRESOLVED (SYMMETRIC) RATIO (FCI Only)")
+    print("UNRESOLVED RATIO (FCI Baseline)")
     print("=" * 80)
-    print(f"Total edges: {unresolved_stats['total_edges']}")
-    print(f"Unique variable pairs: {unresolved_stats['total_pairs']}")
-    print(f"Unresolved pairs (A->B and B->A both exist): {unresolved_stats['unresolved_count']}")
-    print(f"Resolved pairs (only one direction): {unresolved_stats['resolved_count']}")
-    print(f"\nUnresolved Ratio: {unresolved_stats['unresolved_ratio']*100:.1f}%")
+    print(f"Total FCI edges: {unresolved_stats['total_edges']}")
+    print(f"  Directed (->):       {unresolved_stats['resolved_count']:3d}  ({unresolved_stats['resolved_count']/unresolved_stats['total_edges']*100:.1f}%) [direction resolved]")
+    print(f"  Unresolved:          {unresolved_stats['unresolved_count']:3d}  ({unresolved_stats['unresolved_ratio']*100:.1f}%) [direction NOT resolved]")
+    
+    breakdown = unresolved_stats['edge_type_breakdown']
+    print(f"    - Bidirected (<->): {breakdown.get('bidirected', 0):3d}")
+    print(f"    - Partial (o->):    {breakdown.get('partial', 0):3d}")
+    print(f"    - Undirected (o-o): {breakdown.get('undirected', 0):3d}")
+    print(f"    - Tail-tail (--):   {breakdown.get('tail-tail', 0):3d}")
+    print(f"\nFCI Unresolved Ratio (Baseline): {unresolved_stats['unresolved_ratio']*100:.1f}%")
+    print("  ↑ This is what LLM and neural training aim to reduce")
     
     # === 4. STRUCTURAL HAMMING DISTANCE (SHD) ===
     shd_stats = compute_shd(fci_csv_path, ground_truth_path)
