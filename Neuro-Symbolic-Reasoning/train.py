@@ -20,7 +20,7 @@ from modules.model import CausalDiscoveryModel
 from modules.loss import LossComputer
 from modules.evaluator import CausalGraphEvaluator
 from modules.result_manager import ResultManager
-from modules.metrics import compute_bidirectional_ratio, compute_sparsity_metrics
+from modules.metrics import compute_unresolved_ratio, compute_sparsity_metrics
 from modules.ground_truth_loader import GroundTruthLoader, TuebingenEvaluator
 
 
@@ -151,9 +151,9 @@ def main():
         'loss_reconstruction': [],
         'loss_group_lasso': [],
         'loss_cycle': [],
-        'bidirectional_ratio': [],
-        'bidirectional_count': [],
-        'unidirectional_count': [],
+        'unresolved_ratio': [],
+        'unresolved_count': [],
+        'resolved_count': [],
         'overall_sparsity': [],
         'active_connections': [],
         'active_blocks': [],
@@ -188,8 +188,8 @@ def main():
         # Compute monitoring metrics
         if (epoch + 1) % log_interval == 0 or epoch == 0:
             with torch.no_grad():
-                # Bidirectional ratio (key metric for direction learning)
-                bidir_stats = compute_bidirectional_ratio(
+                # Unresolved ratio (key metric for direction learning / symmetry breaking)
+                bidir_stats = compute_unresolved_ratio(
                     adjacency, 
                     priors['blocks'],
                     threshold=cfg['threshold']
@@ -209,9 +209,9 @@ def main():
                 history['loss_reconstruction'].append(loss_dict['reconstruction'].item())
                 history['loss_group_lasso'].append(loss_dict['weighted_group_lasso'].item())
                 history['loss_cycle'].append(loss_dict['cycle_consistency'].item())
-                history['bidirectional_ratio'].append(bidir_stats['bidirectional_ratio'])
-                history['bidirectional_count'].append(bidir_stats['bidirectional'])
-                history['unidirectional_count'].append(bidir_stats['unidirectional'])
+                history['unresolved_ratio'].append(bidir_stats['unresolved_ratio'])
+                history['unresolved_count'].append(bidir_stats['unresolved'])
+                history['resolved_count'].append(bidir_stats['resolved'])
                 history['overall_sparsity'].append(sparsity_stats['overall_sparsity'])
                 history['active_connections'].append(sparsity_stats['active_connections'])
                 history['active_blocks'].append(sparsity_stats['active_blocks'])
@@ -223,8 +223,8 @@ def main():
                       f"(Recon: {loss_dict['reconstruction'].item():.4f}, "
                       f"Lasso: {loss_dict['weighted_group_lasso'].item():.4f}, "
                       f"Cycle: {loss_dict['cycle_consistency'].item():.4f})")
-                print(f"  Direction: Bidir {bidir_stats['bidirectional_ratio']*100:.1f}% "
-                      f"({bidir_stats['bidirectional']}/{bidir_stats['total_pairs']} pairs)")
+                print(f"  Direction: Unresolved {bidir_stats['unresolved_ratio']*100:.1f}% "
+                      f"({bidir_stats['unresolved']}/{bidir_stats['total_pairs']} pairs)")
                 print(f"  Sparsity: Overall {sparsity_stats['overall_sparsity']*100:.1f}%, "
                       f"Block {sparsity_stats['block_sparsity']*100:.1f}% "
                       f"({sparsity_stats['active_blocks']}/{sparsity_stats['total_blocks']} active)")
@@ -234,13 +234,13 @@ def main():
     print(f"  Average: {timing['training']/n_epochs:.3f}s per epoch")
     
     # Print training summary
-    if len(history['bidirectional_ratio']) > 0:
+    if len(history['unresolved_ratio']) > 0:
         print("\n" + "=" * 80)
         print("TRAINING SUMMARY")
         print("=" * 80)
-        print(f"\nDirection Learning:")
-        print(f"  Bidirectional Ratio: {history['bidirectional_ratio'][0]*100:.1f}% -> {history['bidirectional_ratio'][-1]*100:.1f}%")
-        change = (history['bidirectional_ratio'][-1] - history['bidirectional_ratio'][0]) * 100
+        print(f"\nDirection Learning (Symmetry Breaking):")
+        print(f"  Unresolved Ratio: {history['unresolved_ratio'][0]*100:.1f}% -> {history['unresolved_ratio'][-1]*100:.1f}%")
+        change = (history['unresolved_ratio'][-1] - history['unresolved_ratio'][0]) * 100
         status = '[GOOD]' if change < 0 else '[NEEDS TUNING]'
         print(f"  Change: {change:+.1f}% {status}")
         

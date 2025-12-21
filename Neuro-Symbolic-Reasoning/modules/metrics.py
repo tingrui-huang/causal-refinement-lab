@@ -252,16 +252,16 @@ if __name__ == "__main__":
         {'var_pair': ('A', 'C'), 'row_indices': [0, 1], 'col_indices': [4, 5]},
     ]
     
-    bidir_stats = compute_bidirectional_ratio(adjacency, blocks, threshold=0.3)
+    unresolved_stats = compute_unresolved_ratio(adjacency, blocks, threshold=0.3)
     
-    print(f"Bidirectional pairs: {bidir_stats['bidirectional']}")
-    print(f"Unidirectional pairs: {bidir_stats['unidirectional']}")
-    print(f"No direction pairs: {bidir_stats['no_direction']}")
-    print(f"Bidirectional ratio: {bidir_stats['bidirectional_ratio']*100:.1f}%")
+    print(f"Unresolved pairs (symmetric): {unresolved_stats['unresolved']}")
+    print(f"Resolved pairs (one direction): {unresolved_stats['resolved']}")
+    print(f"No direction pairs: {unresolved_stats['no_direction']}")
+    print(f"Unresolved ratio: {unresolved_stats['unresolved_ratio']*100:.1f}%")
     
-    assert bidir_stats['bidirectional'] == 1, "Should have 1 bidirectional pair"
-    assert bidir_stats['unidirectional'] == 1, "Should have 1 unidirectional pair"
-    print("[PASS] Bidirectional ratio test passed!")
+    assert unresolved_stats['unresolved'] == 1, "Should have 1 unresolved pair"
+    assert unresolved_stats['resolved'] == 1, "Should have 1 resolved pair"
+    print("[PASS] Unresolved ratio test passed!")
     
     # Test 2: Sparsity metrics
     print("\nTest 2: Sparsity Metrics")
