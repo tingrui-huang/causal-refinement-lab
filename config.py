@@ -23,7 +23,7 @@ NEURO_SYMBOLIC_DIR = PROJECT_ROOT / 'Neuro-Symbolic-Reasoning'
 # DATASET SELECTION
 # ============================================================================
 # Options: 'alarm', 'tuebingen_pair1', etc.
-DATASET = 'alarm'
+DATASET = 'tuebingen_pair1'  # Switch to Tuebingen for testing
 
 # ============================================================================
 # STEP 1: FCI ALGORITHM SETTINGS
@@ -54,23 +54,23 @@ USE_LLM_PRIOR = True if LLM_MODEL else False
 
 # LLM API settings
 LLM_TEMPERATURE = 0.0  # 0.0 for deterministic results
-LLM_MAX_TOKENS = 500  # Prevent overly long responses
+LLM_MAX_TOKENS = 800  # Prevent overly long responses
 
 # ============================================================================
 # STEP 3: NEURAL TRAINING SETTINGS
 # ============================================================================
 # Training hyperparameters
-LEARNING_RATE = 0.01
-N_EPOCHS = 300  # Number of training epochs
+LEARNING_RATE = 0.05
+N_EPOCHS = 200  # Number of training epochs (increased for better convergence)
 N_HOPS = 1  # Number of reasoning hops (1 = single-hop)
 BATCH_SIZE = None  # None = full batch
 
 # Regularization
-LAMBDA_GROUP_LASSO = 0.01  # Group lasso penalty weight
-LAMBDA_CYCLE = 0.005    # Cycle consistency penalty weight
+LAMBDA_GROUP_LASSO = 0.000  # Group lasso penalty weight
+LAMBDA_CYCLE = 0.06    # Cycle consistency penalty weight (increased to force direction learning)
 
 # Threshold for edge detection
-THRESHOLD = 0.1  # Lower = more edges, Higher = fewer edges
+THRESHOLD = 0.035  # Lower = more edges, Higher = fewer edges
 
 # Logging
 LOG_INTERVAL = 20  # Print training stats every N epochs
@@ -102,16 +102,23 @@ DATASET_CONFIGS = {
     'tuebingen_pair1': {
         # Data files
         'data_path': NEURO_SYMBOLIC_DIR / 'data' / 'tuebingen' / 'pair0001.csv',
-        'metadata_path': NEURO_SYMBOLIC_DIR / 'data' / 'tuebingen' / 'metadata_pair1.json',
+        'metadata_path': NEURO_SYMBOLIC_DIR / 'data' / 'tuebingen' / 'metadata.json',
         
         # Ground truth
-        'ground_truth_path': NEURO_SYMBOLIC_DIR / 'data' / 'tuebingen' / 'ground_truth.json',
-        'ground_truth_type': 'json',  # Pairwise evaluation
+        'ground_truth': [('Altitude', 'Temperature')],  # Altitude -> Temperature
+        'ground_truth_path': None,  # No separate file needed
+        'ground_truth_type': None,
         
         # Data type
-        'data_type': 'continuous',  # Needs discretization
+        'data_type': 'continuous',  # Needs discretization with 5 bins
+        'n_bins': 5,  # Number of bins for discretization (back to 5 for better sample density)
+        'discretization_strategy': 'uniform',  # Uniform binning - preserves data density asymmetry!
         
-        # FCI/LLM outputs
+        # CRITICAL: Skip FCI, use manual skeleton
+        'skip_fci': True,
+        'manual_skeleton': [('Altitude', 'Temperature')],  # Undirected edge, let model learn direction
+        
+        # FCI/LLM outputs (not used for Tuebingen)
         'fci_skeleton_path': None,
         'llm_direction_path': None,
     },
@@ -172,22 +179,32 @@ def get_training_config():
     """Get training-specific configuration"""
     dataset_cfg = get_current_dataset_config()
     
+    # Check if using manual skeleton (skip FCI)
+    skip_fci = dataset_cfg.get('skip_fci', False)
+    manual_skeleton = dataset_cfg.get('manual_skeleton', None)
+    
     return {
         # Dataset
         'dataset_name': DATASET,
         'data_path': str(dataset_cfg['data_path']),
         'metadata_path': str(dataset_cfg['metadata_path']),
-        'ground_truth_path': str(dataset_cfg['ground_truth_path']) if dataset_cfg['ground_truth_path'] else None,
+        'ground_truth_path': str(dataset_cfg['ground_truth_path']) if dataset_cfg.get('ground_truth_path') else None,
+        'ground_truth_edges': dataset_cfg.get('ground_truth', None),  # For simple datasets (list of edges)
         'ground_truth_type': dataset_cfg.get('ground_truth_type', 'bif'),
         'data_type': dataset_cfg.get('data_type', 'discrete'),
         
+        # Manual skeleton (for simple datasets like Tuebingen)
+        'skip_fci': skip_fci,
+        'manual_skeleton': manual_skeleton,
+        
         # FCI/LLM paths (auto-detected from FCI output directory, not data directory!)
-        'fci_skeleton_path': _auto_detect_latest_file('edges_FCI_*.csv', FCI_OUTPUT_DIR / DATASET),
-        'llm_direction_path': _auto_detect_latest_file('edges_FCI_LLM_*.csv', FCI_OUTPUT_DIR / DATASET) if USE_LLM_PRIOR else None,
+        # If skip_fci=True, these will be None
+        'fci_skeleton_path': None if skip_fci else _auto_detect_latest_file('edges_FCI_*.csv', FCI_OUTPUT_DIR / DATASET),
+        'llm_direction_path': None if skip_fci else (_auto_detect_latest_file('edges_FCI_LLM_*.csv', FCI_OUTPUT_DIR / DATASET) if USE_LLM_PRIOR else None),
         
         # LLM settings
         'llm_model': LLM_MODEL,
-        'use_llm_prior': USE_LLM_PRIOR,
+        'use_llm_prior': USE_LLM_PRIOR and not skip_fci,  # No LLM if skipping FCI
         'llm_temperature': LLM_TEMPERATURE,
         'llm_max_tokens': LLM_MAX_TOKENS,
         
@@ -196,11 +213,17 @@ def get_training_config():
         'n_epochs': N_EPOCHS,
         'n_hops': N_HOPS,
         'batch_size': BATCH_SIZE,
+        'lambda_group': LAMBDA_GROUP_LASSO,  # Alias for train_complete.py
         'lambda_group_lasso': LAMBDA_GROUP_LASSO,
         'lambda_cycle': LAMBDA_CYCLE,
         'threshold': THRESHOLD,
+        'edge_threshold': THRESHOLD,  # Alias for train_complete.py
+        
+        # Monitoring
+        'monitor_interval': LOG_INTERVAL,
         
         # Output
+        'output_dir': str(TRAINING_RESULTS_DIR),
         'results_dir': str(TRAINING_RESULTS_DIR),
         'verbose': VERBOSE,
         'log_interval': LOG_INTERVAL,
@@ -340,3 +363,7 @@ if __name__ == "__main__":
         validate_config()
     except Exception as e:
         print(f"[ERROR] {e}")
+
+
+
+
