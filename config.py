@@ -22,8 +22,8 @@ NEURO_SYMBOLIC_DIR = PROJECT_ROOT / 'Neuro-Symbolic-Reasoning'
 # ============================================================================
 # DATASET SELECTION
 # ============================================================================
-# Options: 'alarm', 'tuebingen_pair1', etc.
-DATASET = 'alarm'
+# Options: 'alarm', 'insurance', 'tuebingen_pair1', etc.
+DATASET = 'insurance'
 
 # ============================================================================
 # STEP 1: FCI ALGORITHM SETTINGS
@@ -47,7 +47,7 @@ VALIDATION_ALPHA = 0.01
 #   - 'gpt-3.5-turbo' (GPT-3.5)
 #   - 'gpt-4' (GPT-4)
 #   - 'zephyr-7b' (Zephyr)
-LLM_MODEL = 'gpt-3.5-turbo'  # Set to None for FCI-only pipeline
+LLM_MODEL = 'zephyr-7b'  # Set to None for FCI-only pipeline
 
 # Use LLM prior for direction initialization in neural training?
 USE_LLM_PRIOR = True if LLM_MODEL else False
@@ -66,8 +66,10 @@ N_HOPS = 1  # Number of reasoning hops (1 = single-hop)
 BATCH_SIZE = None  # None = full batch
 
 # Regularization
-LAMBDA_GROUP_LASSO = 0.01  # Group lasso penalty weight
-LAMBDA_CYCLE = 0.005    # Cycle consistency penalty weight
+LAMBDA_GROUP_LASSO = 0.001  # Group lasso penalty weight
+LAMBDA_CYCLE = 0.05    # Cycle consistency penalty weight
+# alarm is 0.01, 0.005, insurance is 0.001,0.05, different datasets have different configurations.
+
 
 # Threshold for edge detection
 THRESHOLD = 0.1  # Lower = more edges, Higher = fewer edges
@@ -89,6 +91,25 @@ DATASET_CONFIGS = {
         
         # Ground truth (for evaluation)
         'ground_truth_path': PROJECT_ROOT / 'alarm.bif',
+        'ground_truth_type': 'bif',  # Type: 'bif', 'json', or None
+        
+        # Data type
+        'data_type': 'discrete',  # 'discrete' or 'continuous'
+        
+        # FCI/LLM outputs (auto-detected, leave as None)
+        'fci_skeleton_path': None,  # Will be auto-detected
+        'llm_direction_path': None,  # Will be auto-detected
+    },
+    
+    'insurance': {
+        # Data files
+        # IMPORTANT: FCI needs variable-level data (27 columns), neural training needs one-hot data (88 columns)
+        'fci_data_path': PROJECT_ROOT / 'insurance_data.csv',  # Variable-level data for FCI (27 vars)
+        'data_path': NEURO_SYMBOLIC_DIR / 'data' / 'insurance' / 'insurance_data_10000.csv',  # One-hot data for neural training (88 states)
+        'metadata_path': NEURO_SYMBOLIC_DIR / 'data' / 'insurance' / 'metadata.json',
+        
+        # Ground truth (for evaluation)
+        'ground_truth_path': NEURO_SYMBOLIC_DIR / 'data' / 'insurance' / 'insurance.bif',
         'ground_truth_type': 'bif',  # Type: 'bif', 'json', or None
         
         # Data type
@@ -340,3 +361,4 @@ if __name__ == "__main__":
         validate_config()
     except Exception as e:
         print(f"[ERROR] {e}")
+

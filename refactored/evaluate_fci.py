@@ -86,6 +86,119 @@ def parse_fci_csv(fci_csv_path):
     return fci_directed, fci_undirected, edge_counts
 
 
+def compute_fci_unresolved_ratio(fci_csv_path):
+    """
+    Compute unresolved (symmetric) ratio from FCI edge list
+    
+    Unresolved ratio = (# of unresolved pairs) / (# of total unique pairs)
+    
+    An unresolved pair means both A->B and B->A exist in the edge list,
+    indicating the direction has not been determined yet (symmetric/unresolved).
+    
+    Args:
+        fci_csv_path: Path to FCI edges CSV
+    
+    Returns:
+        dict: Statistics including unresolved_ratio
+    """
+    df = pd.read_csv(fci_csv_path)
+    
+    # Determine column names
+    if 'Source' in df.columns and 'Target' in df.columns:
+        source_col, target_col = 'Source', 'Target'
+    elif 'source' in df.columns and 'target' in df.columns:
+        source_col, target_col = 'source', 'target'
+    else:
+        source_col, target_col = df.columns[0], df.columns[1]
+    
+    # Build edge set (directed)
+    edges = set()
+    for _, row in df.iterrows():
+        source = row[source_col]
+        target = row[target_col]
+        edges.add((source, target))
+    
+    # Find all unique variable pairs
+    all_pairs = set()
+    for source, target in edges:
+        pair = tuple(sorted([source, target]))
+        all_pairs.add(pair)
+    
+    # Count unresolved (symmetric) pairs
+    unresolved_count = 0  # Both directions exist (symmetric/unresolved)
+    resolved_count = 0     # Only one direction exists (resolved)
+    
+    for var_a, var_b in all_pairs:
+        has_forward = (var_a, var_b) in edges
+        has_backward = (var_b, var_a) in edges
+        
+        if has_forward and has_backward:
+            unresolved_count += 1  # Symmetric/unresolved
+        else:
+            resolved_count += 1     # Resolved to one direction
+    
+    total_pairs = len(all_pairs)
+    unresolved_ratio = unresolved_count / total_pairs if total_pairs > 0 else 0
+    
+    return {
+        'unresolved_count': unresolved_count,
+        'resolved_count': resolved_count,
+        'total_pairs': total_pairs,
+        'unresolved_ratio': unresolved_ratio,
+        'total_edges': len(edges)
+    }
+
+
+def compute_shd(fci_csv_path, ground_truth_path):
+    """
+    Compute Structural Hamming Distance (SHD)
+    
+    SHD = # of edge additions + # of edge deletions + # of edge reversals
+    
+    Args:
+        fci_csv_path: Path to FCI edges CSV
+        ground_truth_path: Path to ground truth BIF file
+    
+    Returns:
+        dict: SHD statistics
+    """
+    # Load ground truth
+    gt_edges = parse_ground_truth(ground_truth_path)
+    
+    # Load FCI edges (only directed ones for SHD)
+    fci_directed, fci_undirected, edge_counts = parse_fci_csv(fci_csv_path)
+    
+    # Convert to undirected for skeleton comparison
+    gt_undirected = {tuple(sorted([e[0], e[1]])) for e in gt_edges}
+    fci_all_undirected = {tuple(sorted([e[0], e[1]])) for e in fci_directed}
+    fci_all_undirected.update(fci_undirected)
+    
+    # Edge additions (FCI has, GT doesn't)
+    additions = len(fci_all_undirected - gt_undirected)
+    
+    # Edge deletions (GT has, FCI doesn't)
+    deletions = len(gt_undirected - fci_all_undirected)
+    
+    # Edge reversals (both have the edge, but direction is wrong)
+    reversals = 0
+    for fci_edge in fci_directed:
+        undirected_edge = tuple(sorted([fci_edge[0], fci_edge[1]]))
+        if undirected_edge in gt_undirected:
+            # Edge exists in GT, check direction
+            reversed_edge = (fci_edge[1], fci_edge[0])
+            if reversed_edge in gt_edges and fci_edge not in gt_edges:
+                reversals += 1
+    
+    shd = additions + deletions + reversals
+    
+    return {
+        'shd': shd,
+        'additions': additions,
+        'deletions': deletions,
+        'reversals': reversals
+    }
+
+
 def evaluate_fci(fci_csv_path, ground_truth_path, output_dir=None):
     """
     Evaluate FCI skeleton against ground truth
@@ -165,7 +278,30 @@ def evaluate_fci(fci_csv_path, ground_truth_path, output_dir=None):
     print(f"Incorrectly Oriented: {incorrectly_oriented}")
     print(f"\nOrientation Accuracy: {orientation_accuracy*100:.1f}%")
     
-    # === 3. UNDIRECTED RATIO ===
+    # === 3. UNRESOLVED (SYMMETRIC) RATIO ===
+    unresolved_stats = compute_fci_unresolved_ratio(fci_csv_path)
+    
+    print("\n" + "=" * 80)
+    print("UNRESOLVED (SYMMETRIC) RATIO (FCI Only)")
+    print("=" * 80)
+    print(f"Total edges: {unresolved_stats['total_edges']}")
+    print(f"Unique variable pairs: {unresolved_stats['total_pairs']}")
+    print(f"Unresolved pairs (A->B and B->A both exist): {unresolved_stats['unresolved_count']}")
+    print(f"Resolved pairs (only one direction): {unresolved_stats['resolved_count']}")
+    print(f"\nUnresolved Ratio: {unresolved_stats['unresolved_ratio']*100:.1f}%")
+    
+    # === 4. STRUCTURAL HAMMING DISTANCE (SHD) ===
+    shd_stats = compute_shd(fci_csv_path, ground_truth_path)
+    
+    print("\n" + "=" * 80)
+    print("STRUCTURAL HAMMING DISTANCE (SHD)")
+    print("=" * 80)
+    print(f"SHD: {shd_stats['shd']}")
+    print(f"  Edge additions (FP): {shd_stats['additions']}")
+    print(f"  Edge deletions (FN): {shd_stats['deletions']}")
+    print(f"  Edge reversals:      {shd_stats['reversals']}")
+    
+    # === 5. UNDIRECTED RATIO ===
     undirected_ratio = len(fci_undirected) / len(fci_all_undirected) if len(fci_all_undirected) > 0 else 0
     
     print("\n" + "=" * 80)
@@ -176,15 +312,17 @@ def evaluate_fci(fci_csv_path, ground_truth_path, output_dir=None):
     print(f"Undirected/Partial: {len(fci_undirected)}")
     print(f"Undirected Ratio: {undirected_ratio*100:.1f}%")
     
-    # === 4. SUMMARY ===
+    # === 6. SUMMARY ===
     print("\n" + "=" * 80)
     print("SUMMARY")
     print("=" * 80)
-    print(f"Edge F1:          {edge_f1*100:.1f}%")
-    print(f"Precision:        {edge_precision*100:.1f}%")
-    print(f"Recall:           {edge_recall*100:.1f}%")
-    print(f"Orient. Accuracy: {orientation_accuracy*100:.1f}%")
-    print(f"Undirected Ratio: {undirected_ratio*100:.1f}%")
+    print(f"SHD:                  {shd_stats['shd']}")
+    print(f"Edge F1:              {edge_f1*100:.1f}%")
+    print(f"Precision:            {edge_precision*100:.1f}%")
+    print(f"Recall:               {edge_recall*100:.1f}%")
+    print(f"Orient. Accuracy:     {orientation_accuracy*100:.1f}%")
+    print(f"Unresolved Ratio:     {unresolved_stats['unresolved_ratio']*100:.1f}%  ← FCI Only (Baseline)")
+    print(f"Undirected Ratio:     {undirected_ratio*100:.1f}%")
     print("=" * 80)
     
     # Save evaluation report
@@ -224,10 +362,17 @@ def evaluate_fci(fci_csv_path, ground_truth_path, output_dir=None):
         print(f"\n✓ Evaluation report saved to: {report_path}")
     
     return {
+        'shd': shd_stats['shd'],
+        'shd_additions': shd_stats['additions'],
+        'shd_deletions': shd_stats['deletions'],
+        'shd_reversals': shd_stats['reversals'],
         'edge_f1': edge_f1,
         'edge_precision': edge_precision,
         'edge_recall': edge_recall,
         'orientation_accuracy': orientation_accuracy,
+        'unresolved_ratio': unresolved_stats['unresolved_ratio'],
+        'unresolved_count': unresolved_stats['unresolved_count'],
+        'resolved_count': unresolved_stats['resolved_count'],
         'undirected_ratio': undirected_ratio,
         'undirected_tp': undirected_tp,
         'undirected_fp': undirected_fp,
@@ -239,11 +384,21 @@ def evaluate_fci(fci_csv_path, ground_truth_path, output_dir=None):
 
 def find_latest_fci_csv(output_dir='output'):
     """Find the most recent FCI CSV file"""
+    from config import DATASET
+    
     output_path = Path(output_dir)
     
     if not output_path.exists():
         return None
     
+    # Try dataset-specific directory first
+    dataset_dir = output_path / DATASET
+    if dataset_dir.exists():
+        fci_csvs = list(dataset_dir.glob('edges_FCI_*.csv'))
+        if fci_csvs:
+            return max(fci_csvs, key=lambda p: p.stat().st_mtime)
+    
+    # Fall back to root output directory
     fci_csvs = list(output_path.glob('edges_FCI_*.csv'))
     
     if not fci_csvs:
@@ -275,3 +430,4 @@ if __name__ == "__main__":
     
     # Evaluate
     metrics = evaluate_fci(latest_fci, gt_path, output_dir=OUTPUT_DIR)
+
