@@ -16,157 +16,14 @@ import torch.optim as optim
 from pathlib import Path
 import json
 import numpy as np
+import time
 
 from modules.data_loader import CausalDataLoader
 from modules.prior_builder import PriorBuilder
 from modules.model import CausalDiscoveryModel
 from modules.loss import LossComputer
 from modules.evaluator import CausalGraphEvaluator
-
-
-def compute_bidirectional_ratio(adjacency: torch.Tensor, 
-                                block_structure: list,
-                                threshold: float = 0.3) -> dict:
-    """
-    Compute bidirectional edge statistics
-    
-    Goal: Track how many block pairs have strong weights in BOTH directions
-    We want this ratio to DECREASE during training (direction learning)
-    
-    FIXED: Now checks ALL variable pairs in FCI skeleton, not just those
-    with both directions in block_structure. For pairs with only one direction
-    in block_structure, we still check the reverse direction in the adjacency
-    matrix (even though it's not explicitly in block_structure).
-    
-    Args:
-        adjacency: (105, 105) adjacency matrix
-        block_structure: List of blocks
-        threshold: Threshold for "strong" weight
-    
-    Returns:
-        Dictionary with bidirectional statistics
-    """
-    bidirectional_count = 0
-    unidirectional_count = 0
-    no_direction_count = 0
-    processed_pairs = set()
-    
-    # Build block lookup
-    block_lookup = {}
-    for block in block_structure:
-        var_a, var_b = block['var_pair']
-        block_lookup[(var_a, var_b)] = block
-    
-    # Get all unique variable pairs from block_structure
-    all_pairs = set()
-    for block in block_structure:
-        var_a, var_b = block['var_pair']
-        pair_key = tuple(sorted([var_a, var_b]))
-        all_pairs.add(pair_key)
-    
-    # Check each unique pair
-    for pair_key in all_pairs:
-        var_a, var_b = pair_key  # Already sorted
-        
-        # Try to get both directions
-        forward_block = block_lookup.get((var_a, var_b))
-        reverse_block = block_lookup.get((var_b, var_a))
-        
-        # Compute strengths for both directions
-        # If a direction is not in block_structure, manually compute from adjacency
-        if forward_block is not None:
-            forward_weights = adjacency[forward_block['row_indices']][:, forward_block['col_indices']]
-            forward_strength = forward_weights.mean().item()
-        else:
-            # Manually compute: need to get state indices from reverse_block
-            if reverse_block is not None:
-                # Swap indices: reverse_block is (var_b, var_a), we want (var_a, var_b)
-                forward_weights = adjacency[reverse_block['col_indices']][:, reverse_block['row_indices']]
-                forward_strength = forward_weights.mean().item()
-            else:
-                # Should not happen if block_structure is correct
-                forward_strength = 0.0
-        
-        if reverse_block is not None:
-            backward_weights = adjacency[reverse_block['row_indices']][:, reverse_block['col_indices']]
-            backward_strength = backward_weights.mean().item()
-        else:
-            # Manually compute: need to get state indices from forward_block
-            if forward_block is not None:
-                # Swap indices: forward_block is (var_a, var_b), we want (var_b, var_a)
-                backward_weights = adjacency[forward_block['col_indices']][:, forward_block['row_indices']]
-                backward_strength = backward_weights.mean().item()
-            else:
-                # Should not happen if block_structure is correct
-                backward_strength = 0.0
-        
-        # Classify
-        forward_strong = forward_strength > threshold
-        backward_strong = backward_strength > threshold
-        
-        if forward_strong and backward_strong:
-            bidirectional_count += 1
-        elif forward_strong or backward_strong:
-            unidirectional_count += 1
-        else:
-            no_direction_count += 1
-    
-    total_pairs = bidirectional_count + unidirectional_count + no_direction_count
-    
-    return {
-        'bidirectional': bidirectional_count,
-        'unidirectional': unidirectional_count,
-        'no_direction': no_direction_count,
-        'total_pairs': total_pairs,
-        'bidirectional_ratio': bidirectional_count / total_pairs if total_pairs > 0 else 0
-    }
-
-
-def compute_sparsity_metrics(adjacency: torch.Tensor,
-                             skeleton_mask: torch.Tensor,
-                             block_structure: list,
-                             threshold: float = 0.1) -> dict:
-    """
-    Compute comprehensive sparsity metrics
-    
-    Args:
-        adjacency: (105, 105) adjacency matrix
-        skeleton_mask: (105, 105) skeleton constraint
-        block_structure: List of blocks
-        threshold: Threshold for "active" connection
-    
-    Returns:
-        Dictionary with sparsity statistics
-    """
-    # Overall sparsity
-    total_allowed = int(skeleton_mask.sum().item())
-    adjacency_np = adjacency.detach().cpu().numpy()
-    active_connections = (adjacency_np > threshold).sum()
-    overall_sparsity = (total_allowed - active_connections) / total_allowed
-    
-    # Block-level sparsity
-    active_blocks = 0
-    for block in block_structure:
-        block_weights = adjacency[block['row_indices']][:, block['col_indices']]
-        if block_weights.mean().item() > threshold:
-            active_blocks += 1
-    
-    block_sparsity = (len(block_structure) - active_blocks) / len(block_structure)
-    
-    # Weight distribution
-    active_weights = adjacency_np[adjacency_np > threshold]
-    
-    return {
-        'total_allowed': total_allowed,
-        'active_connections': int(active_connections),
-        'overall_sparsity': overall_sparsity,
-        'active_blocks': active_blocks,
-        'total_blocks': len(block_structure),
-        'block_sparsity': block_sparsity,
-        'mean_active_weight': float(active_weights.mean()) if len(active_weights) > 0 else 0.0,
-        'max_weight': float(adjacency_np.max()),
-        'min_nonzero_weight': float(adjacency_np[adjacency_np > 0].min()) if (adjacency_np > 0).any() else 0.0
-    }
+from modules.metrics import compute_unresolved_ratio, compute_sparsity_metrics
 
 
 def train_complete(config: dict):
@@ -176,6 +33,9 @@ def train_complete(config: dict):
     Args:
         config: Training configuration
     """
+    # Start timing
+    start_time = time.time()
+    
     print("=" * 70)
     print("COMPLETE TRAINING: FULL INTEGRATION")
     print("=" * 70)
@@ -231,6 +91,43 @@ def train_complete(config: dict):
         var_structure=var_structure
     )
     
+    # === BASELINE: FCI UNRESOLVED RATIO ===
+    # Load FCI results to compute baseline unresolved ratio
+    # Unresolved = all edges where FCI didn't determine a unique direction
+    # This includes: bidirected, partial, undirected, tail-tail (everything except directed)
+    fci_baseline_unresolved_ratio = None
+    if config.get('fci_skeleton_path'):
+        try:
+            import sys
+            import pandas as pd
+            sys.path.insert(0, str(Path(__file__).parent.parent / 'refactored'))
+            from evaluate_fci import parse_fci_csv
+            
+            # Parse FCI CSV to get edge type breakdown
+            fci_directed, fci_undirected, edge_counts = parse_fci_csv(config['fci_skeleton_path'])
+            
+            # Calculate unresolved ratio
+            # Unresolved = ALL non-directed edges (bidirected + partial + undirected + tail-tail)
+            total_edges = sum(edge_counts.values())
+            directed_edges = edge_counts.get('directed', 0)
+            unresolved_edges = total_edges - directed_edges  # Everything except directed
+            fci_baseline_unresolved_ratio = unresolved_edges / total_edges if total_edges > 0 else 0
+            
+            print("\n" + "=" * 70)
+            print("FCI BASELINE (No LLM, No Training)")
+            print("=" * 70)
+            print(f"Total FCI edges: {total_edges}")
+            print(f"  Directed (->):       {directed_edges:3d}  ({directed_edges/total_edges*100:.1f}%) [direction resolved]")
+            print(f"  Unresolved:          {unresolved_edges:3d}  ({fci_baseline_unresolved_ratio*100:.1f}%) [direction NOT resolved]")
+            print(f"    - Bidirected (<->): {edge_counts.get('bidirected', 0):3d}")
+            print(f"    - Partial (o->):    {edge_counts.get('partial', 0):3d}")
+            print(f"    - Undirected (o-o): {edge_counts.get('undirected', 0):3d}")
+            print(f"    - Tail-tail (--):   {edge_counts.get('tail-tail', 0):3d}")
+            print(f"\nFCI Unresolved Ratio (Baseline): {fci_baseline_unresolved_ratio*100:.1f}%")
+            print("=" * 70)
+        except Exception as e:
+            print(f"\n[WARN] Could not compute FCI baseline: {e}")
+    
     # === 6. TRAINING LOOP WITH MONITORING ===
     print("\n[6/6] Starting Training Loop...")
     print("=" * 70)
@@ -243,6 +140,42 @@ def train_complete(config: dict):
     print(f"N hops: {config['n_hops']}")
     print("-" * 70)
     
+    # === INITIAL EVALUATION (EPOCH 0) ===
+    print("\n" + "=" * 70)
+    print("INITIAL STATE (Before Training, After LLM Prior)")
+    print("=" * 70)
+    
+    with torch.no_grad():
+        adjacency = model.get_adjacency()
+        
+        # Initial unresolved ratio
+        unresolved_stats_init = compute_unresolved_ratio(
+            adjacency, 
+            priors['blocks'],
+            threshold=config['edge_threshold']
+        )
+        
+        # Initial sparsity
+        sparsity_stats_init = compute_sparsity_metrics(
+            adjacency,
+            priors['skeleton_mask'],
+            priors['blocks'],
+            threshold=config['edge_threshold']
+        )
+        
+        print(f"\nInitial Unresolved (Symmetric) Ratio: {unresolved_stats_init['unresolved_ratio']*100:.1f}%")
+        print(f"  Unresolved pairs (symmetric): {unresolved_stats_init['unresolved']}")
+        print(f"  Resolved pairs (one direction): {unresolved_stats_init['resolved']}")
+        print(f"  No direction pairs: {unresolved_stats_init['no_direction']}")
+        print(f"  Total pairs: {unresolved_stats_init['total_pairs']}")
+        
+        print(f"\nInitial Sparsity:")
+        print(f"  Overall: {sparsity_stats_init['overall_sparsity']*100:.1f}%")
+        print(f"  Active connections: {sparsity_stats_init['active_connections']}")
+        print(f"  Active blocks: {sparsity_stats_init['active_blocks']}/{sparsity_stats_init['total_blocks']}")
+    
+    print("=" * 70)
+    
     # Tracking history
     history = {
         'epoch': [],
@@ -250,7 +183,7 @@ def train_complete(config: dict):
         'loss_reconstruction': [],
         'loss_group_lasso': [],
         'loss_cycle': [],
-        'bidirectional_ratio': [],
+        'unresolved_ratio': [],  # Renamed from bidirectional_ratio
         'overall_sparsity': [],
         'block_sparsity': [],
         'active_connections': [],
@@ -283,8 +216,8 @@ def train_complete(config: dict):
         # === MONITORING METRICS ===
         if (epoch + 1) % config['monitor_interval'] == 0:
             with torch.no_grad():
-                # Bidirectional ratio
-                bidir_stats = compute_bidirectional_ratio(
+                # Unresolved ratio
+                unresolved_stats = compute_unresolved_ratio(
                     adjacency, 
                     priors['blocks'],
                     threshold=config['edge_threshold']
@@ -304,7 +237,7 @@ def train_complete(config: dict):
                 history['loss_reconstruction'].append(losses['reconstruction'].item())
                 history['loss_group_lasso'].append(losses['weighted_group_lasso'].item())
                 history['loss_cycle'].append(losses['cycle_consistency'].item())
-                history['bidirectional_ratio'].append(bidir_stats['bidirectional_ratio'])
+                history['unresolved_ratio'].append(unresolved_stats['unresolved_ratio'])
                 history['overall_sparsity'].append(sparsity_stats['overall_sparsity'])
                 history['block_sparsity'].append(sparsity_stats['block_sparsity'])
                 history['active_connections'].append(sparsity_stats['active_connections'])
@@ -317,16 +250,23 @@ def train_complete(config: dict):
                 print(f"    Recon:        {losses['reconstruction'].item():8.4f}")
                 print(f"    Group Lasso:  {losses['weighted_group_lasso'].item():8.4f}")
                 print(f"    Cycle:        {losses['cycle_consistency'].item():8.4f}")
-                print(f"  Direction Learning:")
-                print(f"    Bidirectional: {bidir_stats['bidirectional']:3d} / {bidir_stats['total_pairs']:3d} "
-                      f"({bidir_stats['bidirectional_ratio']*100:5.1f}%) [Want: DOWN]")
-                print(f"    Unidirectional: {bidir_stats['unidirectional']:3d} / {bidir_stats['total_pairs']:3d} "
-                      f"({bidir_stats['unidirectional']/bidir_stats['total_pairs']*100:5.1f}%) [Want: UP]")
+                print(f"  Symmetry Breaking (Direction Learning):")
+                print(f"    Unresolved (Symmetric): {unresolved_stats['unresolved']:3d} / {unresolved_stats['total_pairs']:3d} "
+                      f"({unresolved_stats['unresolved_ratio']*100:5.1f}%) [Want: DOWN]")
+                print(f"    Resolved (One Direction): {unresolved_stats['resolved']:3d} / {unresolved_stats['total_pairs']:3d} "
+                      f"({unresolved_stats['resolved']/unresolved_stats['total_pairs']*100:5.1f}%) [Want: UP]")
                 print(f"  Sparsity:")
                 print(f"    Overall:      {sparsity_stats['overall_sparsity']*100:5.1f}% "
                       f"({sparsity_stats['active_connections']}/{sparsity_stats['total_allowed']})")
                 print(f"    Block-level:  {sparsity_stats['block_sparsity']*100:5.1f}% "
                       f"({sparsity_stats['active_blocks']}/{sparsity_stats['total_blocks']})")
+    
+    # Calculate training time
+    training_time = time.time() - start_time
+    
+    print("\n" + "=" * 70)
+    print(f"TRAINING TIME: {training_time:.2f} seconds ({training_time/60:.2f} minutes)")
+    print("=" * 70)
     
     # === FINAL EVALUATION ===
     print("\n" + "=" * 70)
@@ -382,6 +322,10 @@ def train_complete(config: dict):
         f.write("Complete Training Summary\n")
         f.write("=" * 70 + "\n\n")
         
+        f.write("Training Time:\n")
+        f.write(f"  Total: {training_time:.2f} seconds ({training_time/60:.2f} minutes)\n")
+        f.write(f"  Per epoch: {training_time/config['n_epochs']:.3f} seconds\n\n")
+        
         f.write("Configuration:\n")
         f.write(f"  Epochs: {config['n_epochs']}\n")
         f.write(f"  Learning rate: {config['learning_rate']}\n")
@@ -394,10 +338,17 @@ def train_complete(config: dict):
         f.write(f"  Group Lasso: {history['loss_group_lasso'][-1]:.4f}\n")
         f.write(f"  Cycle Consistency: {history['loss_cycle'][-1]:.4f}\n\n")
         
-        f.write("Direction Learning:\n")
-        f.write(f"  Initial Bidirectional Ratio: {history['bidirectional_ratio'][0]*100:.1f}%\n")
-        f.write(f"  Final Bidirectional Ratio: {history['bidirectional_ratio'][-1]*100:.1f}%\n")
-        f.write(f"  Change: {(history['bidirectional_ratio'][-1] - history['bidirectional_ratio'][0])*100:+.1f}%\n\n")
+        f.write("Symmetry Breaking (Direction Learning):\n")
+        if fci_baseline_unresolved_ratio is not None:
+            f.write(f"  FCI Baseline (edges without direction):     {fci_baseline_unresolved_ratio*100:.1f}%\n")
+            # f.write(f"  After LLM Prior (Epoch 0):        {history['unresolved_ratio'][0]*100:.1f}% (symmetric pairs)\n")
+            f.write(f"  After Training (Final, symmetric pairs):    {history['unresolved_ratio'][-1]*100:.1f}%\n")
+            total_improvement = (fci_baseline_unresolved_ratio - history['unresolved_ratio'][-1]) * 100
+            f.write(f"  Total Improvement (FCI → Final): {total_improvement:+.1f}%\n\n")
+        else:
+            f.write(f"  Initial Unresolved Ratio: {history['unresolved_ratio'][0]*100:.1f}%\n")
+            f.write(f"  Final Unresolved Ratio: {history['unresolved_ratio'][-1]*100:.1f}%\n")
+            f.write(f"  Change: {(history['unresolved_ratio'][-1] - history['unresolved_ratio'][0])*100:+.1f}%\n\n")
         
         f.write("Sparsity:\n")
         f.write(f"  Initial Overall: {history['overall_sparsity'][0]*100:.1f}%\n")
@@ -414,7 +365,15 @@ def train_complete(config: dict):
     
     print(f"\nResults saved to: {output_dir}")
     
-    return model, metrics, history
+    # Return results including FCI baseline for comparison
+    results = {
+        'model': model,
+        'metrics': metrics,
+        'history': history,
+        'fci_baseline_unresolved_ratio': fci_baseline_unresolved_ratio
+    }
+    
+    return results
 
 
 if __name__ == "__main__":
@@ -451,7 +410,11 @@ if __name__ == "__main__":
     print("Goal: Verify loss convergence and direction learning")
     print()
     
-    model, metrics, history = train_complete(config)
+    results = train_complete(config)
+    model = results['model']
+    metrics = results['metrics']
+    history = results['history']
+    fci_baseline_unresolved_ratio = results['fci_baseline_unresolved_ratio']
     
     # Print summary
     print("\n" + "=" * 70)
@@ -463,10 +426,17 @@ if __name__ == "__main__":
     print(f"  Group Lasso:    {history['loss_group_lasso'][0]:.4f} -> {history['loss_group_lasso'][-1]:.4f}")
     print(f"  Cycle:          {history['loss_cycle'][0]:.4f} -> {history['loss_cycle'][-1]:.4f}")
     
-    print("\nDirection Learning:")
-    print(f"  Bidirectional Ratio: {history['bidirectional_ratio'][0]*100:.1f}% -> {history['bidirectional_ratio'][-1]*100:.1f}%")
-    change = (history['bidirectional_ratio'][-1] - history['bidirectional_ratio'][0]) * 100
-    print(f"  Change: {change:+.1f}% {'[GOOD]' if change < 0 else '[NEEDS TUNING]'}")
+    print("\nSymmetry Breaking (Direction Learning):")
+    if fci_baseline_unresolved_ratio is not None:
+        print(f"  FCI Baseline (edges without direction):     {fci_baseline_unresolved_ratio*100:.1f}%")
+        # print(f"  After LLM Prior (Epoch 0):        {history['unresolved_ratio'][0]*100:.1f}% (symmetric pairs)")
+        print(f"  After Training (Final, symmetric pairs):    {history['unresolved_ratio'][-1]*100:.1f}%")
+        total_improvement = (fci_baseline_unresolved_ratio - history['unresolved_ratio'][-1]) * 100
+        print(f"  Total Improvement (FCI → Final): {total_improvement:+.1f}%")
+    else:
+        print(f"  Unresolved Ratio: {history['unresolved_ratio'][0]*100:.1f}% -> {history['unresolved_ratio'][-1]*100:.1f}%")
+        change = (history['unresolved_ratio'][-1] - history['unresolved_ratio'][0]) * 100
+        print(f"  Change: {change:+.1f}% {'[GOOD]' if change < 0 else '[NEEDS TUNING]'}")
     
     print("\nSparsity:")
     print(f"  Overall: {history['overall_sparsity'][-1]*100:.1f}% ({history['active_connections'][-1]}/{416})")

@@ -2,13 +2,19 @@
 Training Metrics Module
 
 Provides real-time monitoring functions for tracking:
-1. Direction learning dynamics (bidirectional ratio)
+1. Direction learning dynamics (unresolved ratio - symmetry breaking)
 2. Sparsity evolution
 3. Weight distribution
 
 These metrics are crucial for understanding if the model is:
-- Breaking the bidirectional deadlock (cycle consistency working)
+- Breaking symmetry / resolving directions (cycle consistency working)
 - Learning sparse structures (group lasso working)
+
+Key Concept:
+- "Unresolved" edges are those where both A→B and B→A have strong weights (symmetric/bidirectional)
+- FCI leaves many edges unresolved (undirected/partial)
+- LLM resolves some using domain knowledge
+- Neural network resolves the rest through gradient-based symmetry breaking (GSB)
 """
 
 import torch
@@ -16,14 +22,19 @@ import numpy as np
 from typing import Dict, List
 
 
-def compute_bidirectional_ratio(adjacency: torch.Tensor, 
-                                block_structure: List[Dict],
-                                threshold: float = 0.3) -> Dict:
+def compute_unresolved_ratio(adjacency: torch.Tensor, 
+                             block_structure: List[Dict],
+                             threshold: float = 0.3) -> Dict:
     """
-    Compute bidirectional edge statistics
+    Compute unresolved (symmetric) edge ratio
     
-    Goal: Track how many block pairs have strong weights in BOTH directions
-    We want this ratio to DECREASE during training (direction learning)
+    Goal: Track how many variable pairs have strong weights in BOTH directions (unresolved/symmetric)
+    We want this ratio to DECREASE during training (symmetry breaking / direction learning)
+    
+    Unresolved edges are those where the model hasn't determined a unique causal direction yet.
+    - FCI leaves many edges unresolved (partial/undirected)
+    - LLM resolves some using domain knowledge
+    - Neural network resolves the rest through gradient-based symmetry breaking (GSB)
     
     FIXED: Now checks ALL variable pairs in FCI skeleton, not just those
     with both directions in block_structure. For pairs with only one direction
@@ -36,18 +47,18 @@ def compute_bidirectional_ratio(adjacency: torch.Tensor,
         threshold: Threshold for "strong" weight (default: 0.3)
     
     Returns:
-        Dictionary with bidirectional statistics:
+        Dictionary with unresolved edge statistics:
         {
-            'bidirectional': int,          # Number of bidirectional pairs
-            'unidirectional': int,         # Number of unidirectional pairs
+            'unresolved': int,             # Number of unresolved pairs (symmetric/bidirectional)
+            'resolved': int,               # Number of resolved pairs (one direction)
             'no_direction': int,           # Number of pairs with no strong direction
             'total_pairs': int,            # Total unique variable pairs
-            'bidirectional_ratio': float   # Ratio of bidirectional pairs
+            'unresolved_ratio': float      # Ratio of unresolved pairs
         }
     """
-    bidirectional_count = 0
-    unidirectional_count = 0
-    no_direction_count = 0
+    unresolved_count = 0  # Both directions strong (symmetric/unresolved)
+    resolved_count = 0     # Only one direction strong (resolved)
+    no_direction_count = 0 # Neither direction strong
     
     # Build block lookup
     block_lookup = {}
@@ -103,20 +114,20 @@ def compute_bidirectional_ratio(adjacency: torch.Tensor,
         backward_strong = backward_strength > threshold
         
         if forward_strong and backward_strong:
-            bidirectional_count += 1
+            unresolved_count += 1  # Symmetric/unresolved
         elif forward_strong or backward_strong:
-            unidirectional_count += 1
+            resolved_count += 1     # Resolved to one direction
         else:
-            no_direction_count += 1
+            no_direction_count += 1 # Neither direction
     
-    total_pairs = bidirectional_count + unidirectional_count + no_direction_count
+    total_pairs = unresolved_count + resolved_count + no_direction_count
     
     return {
-        'bidirectional': bidirectional_count,
-        'unidirectional': unidirectional_count,
+        'unresolved': unresolved_count,
+        'resolved': resolved_count,
         'no_direction': no_direction_count,
         'total_pairs': total_pairs,
-        'bidirectional_ratio': bidirectional_count / total_pairs if total_pairs > 0 else 0
+        'unresolved_ratio': unresolved_count / total_pairs if total_pairs > 0 else 0
     }
 
 
@@ -241,16 +252,16 @@ if __name__ == "__main__":
         {'var_pair': ('A', 'C'), 'row_indices': [0, 1], 'col_indices': [4, 5]},
     ]
     
-    bidir_stats = compute_bidirectional_ratio(adjacency, blocks, threshold=0.3)
+    unresolved_stats = compute_unresolved_ratio(adjacency, blocks, threshold=0.3)
     
-    print(f"Bidirectional pairs: {bidir_stats['bidirectional']}")
-    print(f"Unidirectional pairs: {bidir_stats['unidirectional']}")
-    print(f"No direction pairs: {bidir_stats['no_direction']}")
-    print(f"Bidirectional ratio: {bidir_stats['bidirectional_ratio']*100:.1f}%")
+    print(f"Unresolved pairs (symmetric): {unresolved_stats['unresolved']}")
+    print(f"Resolved pairs (one direction): {unresolved_stats['resolved']}")
+    print(f"No direction pairs: {unresolved_stats['no_direction']}")
+    print(f"Unresolved ratio: {unresolved_stats['unresolved_ratio']*100:.1f}%")
     
-    assert bidir_stats['bidirectional'] == 1, "Should have 1 bidirectional pair"
-    assert bidir_stats['unidirectional'] == 1, "Should have 1 unidirectional pair"
-    print("[PASS] Bidirectional ratio test passed!")
+    assert unresolved_stats['unresolved'] == 1, "Should have 1 unresolved pair"
+    assert unresolved_stats['resolved'] == 1, "Should have 1 resolved pair"
+    print("[PASS] Unresolved ratio test passed!")
     
     # Test 2: Sparsity metrics
     print("\nTest 2: Sparsity Metrics")

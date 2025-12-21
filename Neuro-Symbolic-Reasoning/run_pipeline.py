@@ -85,7 +85,70 @@ def run_fci():
     )
     
     if success:
-        print("\n✓ FCI completed successfully")
+        print("\n[OK] FCI completed successfully")
+    
+    return success
+
+
+def run_llm():
+    """Step 2: Run LLM direction resolution (if configured)"""
+    # Check if LLM is configured
+    import sys
+    from pathlib import Path
+    
+    # Add project root to path to import config
+    project_root = Path(__file__).parent.parent
+    sys.path.insert(0, str(project_root))
+    
+    from config import LLM_MODEL
+    
+    if not LLM_MODEL:
+        print("\n[INFO] No LLM configured. Skipping LLM step.")
+        return True
+    
+    refactored_dir = Path('../refactored')
+    
+    # Map LLM model to script
+    if 'gpt' in LLM_MODEL.lower():
+        script_name = 'main_hybrid_fci_llm.py'
+        llm_name = 'GPT-3.5'
+    elif 'zephyr' in LLM_MODEL.lower():
+        script_name = 'main_hybrid_fci_zephyr.py'
+        llm_name = 'Zephyr'
+    else:
+        print(f"[WARN] Unknown LLM model: {LLM_MODEL}. Skipping LLM step.")
+        return True
+    
+    print(f"\n[INFO] LLM configured: {llm_name}")
+    print(f"[INFO] Checking for existing LLM results...")
+    
+    # Check if LLM results already exist
+    from config import DATASET, FCI_OUTPUT_DIR
+    output_dir = FCI_OUTPUT_DIR / DATASET
+    
+    if 'gpt' in LLM_MODEL.lower():
+        pattern = 'edges_FCI_LLM_GPT35_*.csv'
+    else:
+        pattern = 'edges_FCI_LLM_Zephyr_*.csv'
+    
+    existing_files = list(output_dir.glob(pattern)) if output_dir.exists() else []
+    
+    if existing_files:
+        latest_file = max(existing_files, key=lambda p: p.stat().st_mtime)
+        print(f"[INFO] Found existing LLM results: {latest_file.name}")
+        print(f"[INFO] Skipping LLM call. Delete this file to regenerate.")
+        return True
+    
+    print(f"[INFO] No existing results found. Calling {llm_name}...")
+    
+    success = run_command(
+        f"{sys.executable} {script_name}",
+        cwd=refactored_dir,
+        description=f"STEP 2: RUNNING FCI + {llm_name.upper()}"
+    )
+    
+    if success:
+        print(f"\n[OK] LLM ({llm_name}) completed successfully")
     
     return success
 
@@ -101,7 +164,7 @@ def run_fci_evaluation():
     )
     
     if success:
-        print("\n✓ FCI evaluation completed")
+        print("\n[OK] FCI evaluation completed")
     
     return success
 
@@ -117,7 +180,7 @@ def run_export():
     )
     
     if success:
-        print("\n✓ Export completed")
+        print("\n[OK] Export completed")
     
     return success
 
@@ -131,7 +194,7 @@ def run_training():
     )
     
     if success:
-        print("\n✓ Training completed")
+        print("\n[OK] Training completed")
     
     return success
 
@@ -161,10 +224,14 @@ def main():
             sys.exit(1)
     
     elif args.fci_only:
-        # FCI + export only
+        # FCI + LLM + export only
         print("\nMode: FCI only (skip training)")
         
         if not run_fci():
+            sys.exit(1)
+        
+        # Run LLM if configured
+        if not run_llm():
             sys.exit(1)
         
         # Note: Evaluation is already done in main_fci.py
@@ -183,11 +250,15 @@ def main():
         if not run_fci():
             sys.exit(1)
         
-        # Step 2: Export
+        # Step 2: LLM (if configured)
+        if not run_llm():
+            sys.exit(1)
+        
+        # Step 3: Export
         if not run_export():
             sys.exit(1)
         
-        # Step 3: Training
+        # Step 4: Training
         if not run_training():
             sys.exit(1)
     
@@ -202,3 +273,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

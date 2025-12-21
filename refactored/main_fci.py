@@ -145,19 +145,35 @@ def main():
         from evaluate_fci import evaluate_fci, find_latest_fci_csv
         from pathlib import Path
         
-        latest_fci = find_latest_fci_csv()
+        latest_fci = find_latest_fci_csv(get_output_dir())
         gt_path = Path(GROUND_TRUTH_PATH)
         
         if latest_fci and gt_path.exists():
-            evaluate_fci(latest_fci, gt_path, output_dir=get_output_dir())
+            print(f"\n[INFO] Evaluating: {latest_fci.name}")
+            print(f"[INFO] Ground truth: {gt_path.name}\n")
+            
+            metrics = evaluate_fci(latest_fci, gt_path, output_dir=get_output_dir())
+            
+            # Print key metrics for easy reference
+            print("\n" + "=" * 60)
+            print("KEY METRICS (FCI Only)")
+            print("=" * 60)
+            print(f"SHD:                  {metrics['shd']}")
+            print(f"Unresolved Ratio:     {metrics['unresolved_ratio']*100:.1f}%")
+            print(f"Edge F1:              {metrics['edge_f1']*100:.1f}%")
+            print(f"Orientation Accuracy: {metrics['orientation_accuracy']*100:.1f}%")
+            print("=" * 60)
+            
         elif not latest_fci:
             print("[WARN] Could not find FCI output for evaluation")
         elif not gt_path.exists():
             print(f"[WARN] Ground truth file not found: {gt_path}")
             print("Update GROUND_TRUTH_PATH in config.py to enable evaluation")
     except Exception as e:
-        print(f"[WARN] Evaluation failed: {e}")
-        print("You can run 'python evaluate_fci.py' manually later.")
+        import traceback
+        print(f"[ERROR] Evaluation failed: {e}")
+        traceback.print_exc()
+        print("\nYou can run 'python evaluate_fci.py' manually later.")
     
     print("\n" + "=" * 60)
     print("All done!")

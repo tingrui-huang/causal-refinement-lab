@@ -134,6 +134,7 @@ class PriorBuilder:
         if has_edge_type:
             print(f"    - Directed (one direction): {directed_count}")
             print(f"    - Undirected/Partial/Tail-tail (both directions): {bidirectional_count}")
+            print(f"  FCI Bidirectional Ratio: {bidirectional_count/edge_count*100:.1f}% ({bidirectional_count}/{edge_count} edges)")
         print(f"  Allowed connections: {allowed} / {total_possible} ({allowed/total_possible*100:.2f}%)")
         print(f"  Forbidden connections: {total_possible - allowed}")
         
