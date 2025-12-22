@@ -23,7 +23,7 @@ NEURO_SYMBOLIC_DIR = PROJECT_ROOT / 'Neuro-Symbolic-Reasoning'
 # DATASET SELECTION
 # ============================================================================
 # Options: 'alarm', 'insurance', 'sachs', 'child', 'hailfinder', 'win95pts', 'tuebingen_pair1', etc.
-DATASET = 'andes'
+DATASET = 'alarm'
 
 # ============================================================================
 # STEP 1: FCI ALGORITHM SETTINGS
@@ -61,13 +61,13 @@ LLM_MAX_TOKENS = 500  # Prevent overly long responses
 # ============================================================================
 # Training hyperparameters
 LEARNING_RATE = 0.01
-N_EPOCHS = 1500  # Number of training epochs
+N_EPOCHS = 300  # Number of training epochs, andes 1500
 N_HOPS = 1  # Number of reasoning hops (1 = single-hop)
 BATCH_SIZE = None  # None = full batch
 
 # Regularization
-LAMBDA_GROUP_LASSO = 0.0001  # Group lasso penalty weight
-LAMBDA_CYCLE = 0.01    # Cycle consistency penalty weight
+LAMBDA_GROUP_LASSO = 0.01  # Group lasso penalty weight
+LAMBDA_CYCLE = 0.0005    # Cycle consistency penalty weight
 # alarm is 0.01, 0.005, insurance is 0.001,0.05, different datasets have different configurations.
 # Sachs for these two should be as much lower as possible, like 0 and 0.001
 # child is 0.005, 0,.005
@@ -76,7 +76,7 @@ LAMBDA_CYCLE = 0.01    # Cycle consistency penalty weight
 
 
 # Threshold for edge detection
-THRESHOLD = 0.008
+THRESHOLD = 0.1
 # Lower = more edges, Higher = fewer edges Sachs dataset should be lower, like 0.008
 # child is 0.05
 # hailfinder is 0.05
