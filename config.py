@@ -22,8 +22,8 @@ NEURO_SYMBOLIC_DIR = PROJECT_ROOT / 'Neuro-Symbolic-Reasoning'
 # ============================================================================
 # DATASET SELECTION
 # ============================================================================
-# Options: 'alarm', 'insurance', 'sachs', 'child', 'hailfinder', 'tuebingen_pair1', etc.
-DATASET = 'hailfinder'
+# Options: 'alarm', 'insurance', 'sachs', 'child', 'hailfinder', 'win95pts', 'tuebingen_pair1', etc.
+DATASET = 'win95pts'
 
 # ============================================================================
 # STEP 1: FCI ALGORITHM SETTINGS
@@ -194,6 +194,25 @@ DATASET_CONFIGS = {
         
         # Data type
         'data_type': 'discrete',  # Discrete meteorological variables
+        
+        # FCI/LLM outputs (auto-detected, leave as None)
+        'fci_skeleton_path': None,  # Will be auto-detected
+        'llm_direction_path': None,  # Will be auto-detected
+    },
+    
+    'win95pts': {
+        # Data files
+        # IMPORTANT: FCI needs variable-level data (76 columns), neural training needs one-hot data (151 columns)
+        'fci_data_path': PROJECT_ROOT / 'win95pts_data_variable.csv',  # Variable-level data for FCI (76 vars)
+        'data_path': NEURO_SYMBOLIC_DIR / 'data' / 'win95pts' / 'win95pts_data.csv',  # One-hot data for neural training (151 states)
+        'metadata_path': NEURO_SYMBOLIC_DIR / 'data' / 'win95pts' / 'metadata.json',
+        
+        # Ground truth (for evaluation)
+        'ground_truth_path': NEURO_SYMBOLIC_DIR / 'data' / 'win95pts' / 'win95pts_ground_truth.txt',
+        'ground_truth_type': 'edge_list',  # Type: 'bif', 'json', 'edge_list', or None
+        
+        # Data type
+        'data_type': 'discrete',  # Discrete troubleshooting variables
         
         # FCI/LLM outputs (auto-detected, leave as None)
         'fci_skeleton_path': None,  # Will be auto-detected
