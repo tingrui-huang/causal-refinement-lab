@@ -11,25 +11,57 @@ from pathlib import Path
 from datetime import datetime
 
 
-def parse_ground_truth(bif_path):
-    """Parse ground truth edges from BIF file"""
-    ground_truth_edges = set()
+def parse_ground_truth(gt_path):
+    """
+    Parse ground truth edges from file
     
-    with open(bif_path, 'r') as f:
+    Supports:
+    - BIF format (Bayesian Network)
+    - Edge list format (simple text: source -> target)
+    
+    Args:
+        gt_path: Path to ground truth file
+    
+    Returns:
+        Set of (source, target) tuples
+    """
+    ground_truth_edges = set()
+    gt_path = Path(gt_path)
+    
+    with open(gt_path, 'r', encoding='utf-8') as f:
         content = f.read()
     
-    # Extract probability declarations
-    # Format: probability ( CHILD | PARENT1, PARENT2, ... )
+    # Try BIF format first
     prob_pattern = r'probability\s*\(\s*(\w+)\s*\|\s*([^)]+)\s*\)'
+    matches = list(re.finditer(prob_pattern, content))
     
-    for match in re.finditer(prob_pattern, content):
-        child = match.group(1)
-        parents_str = match.group(2)
-        parents = [p.strip() for p in parents_str.split(',')]
-        
-        for parent in parents:
-            if parent:
-                ground_truth_edges.add((parent, child))
+    if matches:
+        # BIF format detected
+        for match in matches:
+            child = match.group(1)
+            parents_str = match.group(2)
+            parents = [p.strip() for p in parents_str.split(',')]
+            
+            for parent in parents:
+                if parent:
+                    ground_truth_edges.add((parent, child))
+    else:
+        # Try edge list format: "source -> target"
+        for line in content.split('\n'):
+            line = line.strip()
+            
+            # Skip comments and empty lines
+            if not line or line.startswith('#'):
+                continue
+            
+            # Parse edge: "A -> B"
+            if '->' in line:
+                parts = line.split('->')
+                if len(parts) == 2:
+                    source = parts[0].strip()
+                    target = parts[1].strip()
+                    if source and target:
+                        ground_truth_edges.add((source, target))
     
     return ground_truth_edges
 
@@ -130,14 +162,21 @@ def compute_shd(fci_csv_path, ground_truth_path):
     """
     Compute Structural Hamming Distance (SHD)
     
-    SHD = # of edge additions + # of edge deletions + # of edge reversals
+    Two types of SHD:
+    1. Skeleton SHD = E_add + E_del (undirected, only edge existence)
+    2. Full SHD = E_add + E_del + E_rev (directed, standard NeurIPS/ICLR metric)
+    
+    Where:
+    - E_add (additions): edges in FCI but not in GT (undirected)
+    - E_del (deletions): edges in GT but not in FCI (undirected)
+    - E_rev (reversals): edges with correct skeleton but wrong direction
     
     Args:
         fci_csv_path: Path to FCI edges CSV
-        ground_truth_path: Path to ground truth BIF file
+        ground_truth_path: Path to ground truth file
     
     Returns:
-        dict: SHD statistics
+        dict: SHD statistics with both skeleton_shd and full_shd
     """
     # Load ground truth
     gt_edges = parse_ground_truth(ground_truth_path)
@@ -150,14 +189,22 @@ def compute_shd(fci_csv_path, ground_truth_path):
     fci_all_undirected = {tuple(sorted([e[0], e[1]])) for e in fci_directed}
     fci_all_undirected.update(fci_undirected)
     
-    # Edge additions (FCI has, GT doesn't)
+    # Edge additions (FCI has, GT doesn't) - undirected
     additions = len(fci_all_undirected - gt_undirected)
     
-    # Edge deletions (GT has, FCI doesn't)
+    # Edge deletions (GT has, FCI doesn't) - undirected
     deletions = len(gt_undirected - fci_all_undirected)
     
-    # Edge reversals (both have the edge, but direction is wrong)
+    # Edge reversals and unresolved edges
+    # For fair comparison with Neural Network:
+    # - Directed edges with wrong direction count as reversals
+    # - Undirected edges (o-o, o->, <->, --) also count as reversals
+    #   because they fail to determine the correct direction
+    
     reversals = 0
+    unresolved_as_errors = 0
+    
+    # Count reversals in directed FCI edges
     for fci_edge in fci_directed:
         undirected_edge = tuple(sorted([fci_edge[0], fci_edge[1]]))
         if undirected_edge in gt_undirected:
@@ -166,13 +213,30 @@ def compute_shd(fci_csv_path, ground_truth_path):
             if reversed_edge in gt_edges and fci_edge not in gt_edges:
                 reversals += 1
     
-    shd = additions + deletions + reversals
+    # Count undirected edges as errors (strict mode for fair comparison)
+    # These edges exist in both FCI and GT, but FCI failed to orient them
+    for fci_undir_edge in fci_undirected:
+        if fci_undir_edge in gt_undirected:
+            # This edge exists in GT with a direction, but FCI left it undirected
+            # Count as reversal (direction error)
+            unresolved_as_errors += 1
+    
+    # Skeleton SHD: only edge existence (undirected)
+    skeleton_shd = additions + deletions
+    
+    # Full SHD: edge existence + direction (standard metric)
+    # Include unresolved edges as direction errors for fair comparison
+    full_shd = additions + deletions + reversals + unresolved_as_errors
     
     return {
-        'shd': shd,
+        'skeleton_shd': skeleton_shd,
+        'full_shd': full_shd,
+        'shd': full_shd,  # Default to full_shd for backward compatibility
         'additions': additions,
         'deletions': deletions,
-        'reversals': reversals
+        'reversals': reversals,
+        'unresolved_as_errors': unresolved_as_errors,
+        'total_direction_errors': reversals + unresolved_as_errors
     }
 
 
@@ -279,10 +343,16 @@ def evaluate_fci(fci_csv_path, ground_truth_path, output_dir=None):
     print("\n" + "=" * 80)
     print("STRUCTURAL HAMMING DISTANCE (SHD)")
     print("=" * 80)
-    print(f"SHD: {shd_stats['shd']}")
-    print(f"  Edge additions (FP): {shd_stats['additions']}")
-    print(f"  Edge deletions (FN): {shd_stats['deletions']}")
-    print(f"  Edge reversals:      {shd_stats['reversals']}")
+    print(f"Skeleton SHD: {shd_stats['skeleton_shd']}  (E_add + E_del, undirected)")
+    print(f"  E_add (FP):   {shd_stats['additions']}  (edges added)")
+    print(f"  E_del (FN):   {shd_stats['deletions']}  (edges missing)")
+    print(f"\nFull SHD:     {shd_stats['full_shd']}  (E_add + E_del + E_rev, directed)")
+    print(f"  E_add (FP):   {shd_stats['additions']}  (edges added)")
+    print(f"  E_del (FN):   {shd_stats['deletions']}  (edges missing)")
+    print(f"  E_rev:        {shd_stats['total_direction_errors']}  (direction errors)")
+    print(f"    - Reversed: {shd_stats['reversals']}  (wrong direction)")
+    print(f"    - Unresolved: {shd_stats['unresolved_as_errors']}  (undirected in FCI)")
+    print(f"\n[NOTE] Unresolved edges count as direction errors for fair comparison with Neural Network")
     
     # === 5. UNDIRECTED RATIO ===
     undirected_ratio = len(fci_undirected) / len(fci_all_undirected) if len(fci_all_undirected) > 0 else 0
@@ -299,7 +369,8 @@ def evaluate_fci(fci_csv_path, ground_truth_path, output_dir=None):
     print("\n" + "=" * 80)
     print("SUMMARY")
     print("=" * 80)
-    print(f"SHD:                  {shd_stats['shd']}")
+    print(f"Skeleton SHD:         {shd_stats['skeleton_shd']}  (undirected)")
+    print(f"Full SHD:             {shd_stats['full_shd']}  (directed, standard metric)")
     print(f"Edge F1:              {edge_f1*100:.1f}%")
     print(f"Precision:            {edge_precision*100:.1f}%")
     print(f"Recall:               {edge_recall*100:.1f}%")
@@ -345,7 +416,9 @@ def evaluate_fci(fci_csv_path, ground_truth_path, output_dir=None):
         print(f"\n✓ Evaluation report saved to: {report_path}")
     
     return {
-        'shd': shd_stats['shd'],
+        'skeleton_shd': shd_stats['skeleton_shd'],
+        'full_shd': shd_stats['full_shd'],
+        'shd': shd_stats['shd'],  # Default to full_shd
         'shd_additions': shd_stats['additions'],
         'shd_deletions': shd_stats['deletions'],
         'shd_reversals': shd_stats['reversals'],

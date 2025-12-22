@@ -2,8 +2,9 @@
 Ground Truth Loader - Extensible for Multiple Formats
 
 Supports:
-- BIF format (ALARM, etc.)
+- BIF format (ALARM, Insurance, etc.)
 - JSON format (Tuebingen pairs)
+- Edge list format (Sachs, etc.)
 - Future formats can be easily added
 """
 
@@ -25,7 +26,7 @@ class GroundTruthLoader:
         """
         Args:
             ground_truth_path: Path to ground truth file
-            ground_truth_type: Type of ground truth ('bif', 'json', etc.)
+            ground_truth_type: Type of ground truth ('bif', 'json', 'edge_list')
         """
         self.path = Path(ground_truth_path) if ground_truth_path else None
         self.type = ground_truth_type
@@ -40,6 +41,8 @@ class GroundTruthLoader:
             return self._load_bif()
         elif self.type == 'json':
             return self._load_json()
+        elif self.type == 'edge_list':
+            return self._load_edge_list()
         else:
             raise ValueError(f"Unsupported ground truth type: {self.type}")
     
@@ -91,12 +94,46 @@ class GroundTruthLoader:
         
         return data
     
+    def _load_edge_list(self) -> Set[Tuple[str, str]]:
+        """
+        Load edge list format (Sachs, etc.)
+        
+        Format:
+            # Comments start with #
+            source1 -> target1
+            source2 -> target2
+            ...
+        
+        Returns:
+            Set of directed edges (source, target)
+        """
+        edges = set()
+        
+        with open(self.path, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                
+                # Skip comments and empty lines
+                if not line or line.startswith('#'):
+                    continue
+                
+                # Parse edge: "A -> B"
+                if '->' in line:
+                    parts = line.split('->')
+                    if len(parts) == 2:
+                        source = parts[0].strip()
+                        target = parts[1].strip()
+                        if source and target:
+                            edges.add((source, target))
+        
+        return edges
+    
     def get_edges(self) -> Optional[Set[Tuple[str, str]]]:
         """Get ground truth edges (for graph-based evaluation)"""
-        if self.type == 'bif':
+        if self.type in ['bif', 'edge_list']:
             return self.edges
         else:
-            # For non-graph formats, return None
+            # For non-graph formats (e.g., JSON for pairwise), return None
             return None
     
     def get_direction(self, pair_id: str) -> Optional[str]:
@@ -268,3 +305,4 @@ if __name__ == "__main__":
     print("\n" + "=" * 80)
     print("ALL TESTS PASSED")
     print("=" * 80)
+
