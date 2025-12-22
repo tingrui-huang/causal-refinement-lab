@@ -22,8 +22,8 @@ NEURO_SYMBOLIC_DIR = PROJECT_ROOT / 'Neuro-Symbolic-Reasoning'
 # ============================================================================
 # DATASET SELECTION
 # ============================================================================
-# Options: 'alarm', 'insurance', 'sachs', 'child', 'tuebingen_pair1', etc.
-DATASET = 'child'
+# Options: 'alarm', 'insurance', 'sachs', 'child', 'hailfinder', 'tuebingen_pair1', etc.
+DATASET = 'hailfinder'
 
 # ============================================================================
 # STEP 1: FCI ALGORITHM SETTINGS
@@ -66,17 +66,19 @@ N_HOPS = 1  # Number of reasoning hops (1 = single-hop)
 BATCH_SIZE = None  # None = full batch
 
 # Regularization
-LAMBDA_GROUP_LASSO = 0.005  # Group lasso penalty weight
+LAMBDA_GROUP_LASSO = 0.01  # Group lasso penalty weight
 LAMBDA_CYCLE = 0.005    # Cycle consistency penalty weight
 # alarm is 0.01, 0.005, insurance is 0.001,0.05, different datasets have different configurations.
 # Sachs for these two should be as much lower as possible, like 0 and 0.001
 # child is 0.005, 0,.005
+# hailfinder is 0.01 0.005
 
 
 # Threshold for edge detection
-THRESHOLD = 0.05
+THRESHOLD = 0.1
 # Lower = more edges, Higher = fewer edges Sachs dataset should be lower, like 0.008
 # child is 0.05
+# hailfinder is 0.05
 
 # Logging
 LOG_INTERVAL = 20  # Print training stats every N epochs
@@ -173,6 +175,25 @@ DATASET_CONFIGS = {
         
         # Data type
         'data_type': 'discrete',  # Discrete medical diagnosis variables
+        
+        # FCI/LLM outputs (auto-detected, leave as None)
+        'fci_skeleton_path': None,  # Will be auto-detected
+        'llm_direction_path': None,  # Will be auto-detected
+    },
+    
+    'hailfinder': {
+        # Data files
+        # IMPORTANT: FCI needs variable-level data (56 columns), neural training needs one-hot data (223 columns)
+        'fci_data_path': PROJECT_ROOT / 'hailfinder_data_variable.csv',  # Variable-level data for FCI (56 vars)
+        'data_path': NEURO_SYMBOLIC_DIR / 'data' / 'hailfinder' / 'hailfinder_data.csv',  # One-hot data for neural training (223 states)
+        'metadata_path': NEURO_SYMBOLIC_DIR / 'data' / 'hailfinder' / 'metadata.json',
+        
+        # Ground truth (for evaluation)
+        'ground_truth_path': NEURO_SYMBOLIC_DIR / 'data' / 'hailfinder' / 'hailfinder_ground_truth.txt',
+        'ground_truth_type': 'edge_list',  # Type: 'bif', 'json', 'edge_list', or None
+        
+        # Data type
+        'data_type': 'discrete',  # Discrete meteorological variables
         
         # FCI/LLM outputs (auto-detected, leave as None)
         'fci_skeleton_path': None,  # Will be auto-detected
