@@ -23,7 +23,7 @@ NEURO_SYMBOLIC_DIR = PROJECT_ROOT / 'Neuro-Symbolic-Reasoning'
 # DATASET SELECTION
 # ============================================================================
 # Options: 'alarm', 'insurance', 'sachs', 'child', 'hailfinder', 'win95pts', 'tuebingen_pair1', etc.
-DATASET = 'win95pts'
+DATASET = 'andes'
 
 # ============================================================================
 # STEP 1: FCI ALGORITHM SETTINGS
@@ -61,24 +61,26 @@ LLM_MAX_TOKENS = 500  # Prevent overly long responses
 # ============================================================================
 # Training hyperparameters
 LEARNING_RATE = 0.01
-N_EPOCHS = 300  # Number of training epochs
+N_EPOCHS = 1500  # Number of training epochs
 N_HOPS = 1  # Number of reasoning hops (1 = single-hop)
 BATCH_SIZE = None  # None = full batch
 
 # Regularization
-LAMBDA_GROUP_LASSO = 0.01  # Group lasso penalty weight
-LAMBDA_CYCLE = 0.005    # Cycle consistency penalty weight
+LAMBDA_GROUP_LASSO = 0.0001  # Group lasso penalty weight
+LAMBDA_CYCLE = 0.01    # Cycle consistency penalty weight
 # alarm is 0.01, 0.005, insurance is 0.001,0.05, different datasets have different configurations.
 # Sachs for these two should be as much lower as possible, like 0 and 0.001
 # child is 0.005, 0,.005
 # hailfinder is 0.01 0.005
+# andes is 0.0001 0.01
 
 
 # Threshold for edge detection
-THRESHOLD = 0.1
+THRESHOLD = 0.008
 # Lower = more edges, Higher = fewer edges Sachs dataset should be lower, like 0.008
 # child is 0.05
 # hailfinder is 0.05
+# andes is 0.008
 
 # Logging
 LOG_INTERVAL = 20  # Print training stats every N epochs
@@ -213,6 +215,25 @@ DATASET_CONFIGS = {
         
         # Data type
         'data_type': 'discrete',  # Discrete troubleshooting variables
+        
+        # FCI/LLM outputs (auto-detected, leave as None)
+        'fci_skeleton_path': None,  # Will be auto-detected
+        'llm_direction_path': None,  # Will be auto-detected
+    },
+    
+    'andes': {
+        # Data files
+        # IMPORTANT: FCI needs variable-level data (223 columns), neural training needs one-hot data (446 columns)
+        'fci_data_path': PROJECT_ROOT / 'andes_data_variable.csv',  # Variable-level data for FCI (223 vars)
+        'data_path': NEURO_SYMBOLIC_DIR / 'data' / 'andes' / 'andes_data.csv',  # One-hot data for neural training (446 states)
+        'metadata_path': NEURO_SYMBOLIC_DIR / 'data' / 'andes' / 'metadata.json',
+        
+        # Ground truth (for evaluation)
+        'ground_truth_path': NEURO_SYMBOLIC_DIR / 'data' / 'andes' / 'andes_ground_truth.txt',
+        'ground_truth_type': 'edge_list',  # Type: 'bif', 'json', 'edge_list', or None
+        
+        # Data type
+        'data_type': 'discrete',  # Discrete tutoring variables
         
         # FCI/LLM outputs (auto-detected, leave as None)
         'fci_skeleton_path': None,  # Will be auto-detected
