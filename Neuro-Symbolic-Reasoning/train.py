@@ -334,12 +334,14 @@ def main():
             learned_edges = set()  # Not applicable for pairwise
             
         else:
-            # Graph-based evaluation (ALARM, etc.)
-            print("[INFO] Using graph-based evaluation (BIF format)")
+            # Graph-based evaluation (ALARM, Insurance, Sachs, etc.)
+            gt_type = cfg.get('ground_truth_type', 'bif')
+            print(f"[INFO] Using graph-based evaluation ({gt_type} format)")
             
             evaluator = CausalGraphEvaluator(
                 ground_truth_path=cfg['ground_truth_path'],
-                var_structure=var_structure
+                var_structure=var_structure,
+                ground_truth_type=gt_type
             )
             
             # Extract learned edges
@@ -423,7 +425,8 @@ def main():
     if metrics:
         print(f"Edge F1:          {metrics['edge_f1']:.1%}")
         print(f"Orient. Accuracy: {metrics['orientation_accuracy']:.1%}")
-        print(f"SHD:              {metrics['shd']}")
+        print(f"Skeleton SHD:     {metrics['skeleton_shd']} (undirected)")
+        print(f"Full SHD:         {metrics['full_shd']} (directed, standard metric)")
         print()
     
     print(f"Results saved to: {run_dir}")

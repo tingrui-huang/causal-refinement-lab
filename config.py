@@ -22,7 +22,7 @@ NEURO_SYMBOLIC_DIR = PROJECT_ROOT / 'Neuro-Symbolic-Reasoning'
 # ============================================================================
 # DATASET SELECTION
 # ============================================================================
-# Options: 'alarm', 'insurance', 'tuebingen_pair1', etc.
+# Options: 'alarm', 'insurance', 'sachs', 'tuebingen_pair1', etc.
 DATASET = 'alarm'
 
 # ============================================================================
@@ -47,7 +47,7 @@ VALIDATION_ALPHA = 0.01
 #   - 'gpt-3.5-turbo' (GPT-3.5)
 #   - 'gpt-4' (GPT-4)
 #   - 'zephyr-7b' (Zephyr)
-LLM_MODEL = 'gpt-3.5-turbo'  # Set to None for FCI-only pipeline
+LLM_MODEL = 'gpt-3.5-turbo'  # Set to None for FCI-only pipeline (testing GSB framework)
 
 # Use LLM prior for direction initialization in neural training?
 USE_LLM_PRIOR = True if LLM_MODEL else False
@@ -69,10 +69,12 @@ BATCH_SIZE = None  # None = full batch
 LAMBDA_GROUP_LASSO = 0.01  # Group lasso penalty weight
 LAMBDA_CYCLE = 0.005    # Cycle consistency penalty weight
 # alarm is 0.01, 0.005, insurance is 0.001,0.05, different datasets have different configurations.
+# Sachs for these two should be as much lower as possible, like 0 and 0.001
 
 
 # Threshold for edge detection
-THRESHOLD = 0.1  # Lower = more edges, Higher = fewer edges
+THRESHOLD = 0.1
+# Lower = more edges, Higher = fewer edges Sachs dataset should be lower, like 0.008
 
 # Logging
 LOG_INTERVAL = 20  # Print training stats every N epochs
@@ -137,6 +139,25 @@ DATASET_CONFIGS = {
         'llm_direction_path': None,
     },
     
+    'sachs': {
+        # Data files
+        # IMPORTANT: FCI needs variable-level data (11 columns), neural training needs one-hot data (~33 columns)
+        'fci_data_path': PROJECT_ROOT / 'sachs_data_variable.csv',  # Variable-level data for FCI (11 vars)
+        'data_path': NEURO_SYMBOLIC_DIR / 'data' / 'sachs' / 'sachs_data.csv',  # One-hot data for neural training (~33 states)
+        'metadata_path': NEURO_SYMBOLIC_DIR / 'data' / 'sachs' / 'metadata.json',
+        
+        # Ground truth (for evaluation)
+        'ground_truth_path': NEURO_SYMBOLIC_DIR / 'data' / 'sachs' / 'sachs_ground_truth.txt',
+        'ground_truth_type': 'edge_list',  # Type: 'bif', 'json', 'edge_list', or None
+        
+        # Data type
+        'data_type': 'discrete',  # Pre-discretized from bnlearn (3 states per variable)
+        
+        # FCI/LLM outputs (auto-detected, leave as None)
+        'fci_skeleton_path': None,  # Will be auto-detected
+        'llm_direction_path': None,  # Will be auto-detected
+    },
+    
     # Add more datasets here...
 }
 
@@ -184,6 +205,7 @@ def get_fci_config():
         'validation_alpha': VALIDATION_ALPHA,
         'output_dir': str(FCI_OUTPUT_DIR),
         'ground_truth_path': str(dataset_cfg['ground_truth_path']),
+        'ground_truth_type': dataset_cfg.get('ground_truth_type', 'bif'),
         'llm_temperature': LLM_TEMPERATURE,
         'llm_max_tokens': LLM_MAX_TOKENS,
     }

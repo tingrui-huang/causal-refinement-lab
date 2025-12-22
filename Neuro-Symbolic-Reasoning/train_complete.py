@@ -86,9 +86,11 @@ def train_complete(config: dict):
     optimizer = optim.Adam(model.parameters(), lr=config['learning_rate'])
     
     # Initialize evaluator
+    gt_type = config.get('ground_truth_type', 'bif')
     evaluator = CausalGraphEvaluator(
         ground_truth_path=config['ground_truth_path'],
-        var_structure=var_structure
+        var_structure=var_structure,
+        ground_truth_type=gt_type
     )
     
     # === BASELINE: FCI UNRESOLVED RATIO ===

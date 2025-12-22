@@ -25,21 +25,29 @@ class CausalGraphEvaluator:
     4. Structural Hamming Distance (SHD)
     """
     
-    def __init__(self, ground_truth_path: str, var_structure: Dict):
+    def __init__(self, ground_truth_path: str, var_structure: Dict, ground_truth_type: str = 'bif'):
         """
         Args:
-            ground_truth_path: Path to BIF file with ground truth
+            ground_truth_path: Path to ground truth file
             var_structure: Variable structure from DataLoader
+            ground_truth_type: Type of ground truth file ('bif', 'edge_list', etc.)
         """
         self.ground_truth_path = Path(ground_truth_path)
         self.var_structure = var_structure
+        self.ground_truth_type = ground_truth_type
         
-        # Parse ground truth
-        self.ground_truth_edges, self.all_variables = self._parse_bif()
+        # Parse ground truth based on type
+        if ground_truth_type == 'bif':
+            self.ground_truth_edges, self.all_variables = self._parse_bif()
+        elif ground_truth_type == 'edge_list':
+            self.ground_truth_edges, self.all_variables = self._parse_edge_list()
+        else:
+            raise ValueError(f"Unsupported ground truth type: {ground_truth_type}")
         
         print("=" * 70)
         print("EVALUATOR INITIALIZED")
         print("=" * 70)
+        print(f"Ground truth type: {ground_truth_type}")
         print(f"Ground truth edges: {len(self.ground_truth_edges)}")
         print(f"Variables: {len(self.all_variables)}")
     
@@ -75,6 +83,45 @@ class CausalGraphEvaluator:
             for parent in parents:
                 if parent:  # Skip empty strings
                     ground_truth_edges.add((parent, child))
+        
+        return ground_truth_edges, all_variables
+    
+    def _parse_edge_list(self) -> Tuple[Set[Tuple[str, str]], Set[str]]:
+        """
+        Parse ground truth from edge list file
+        
+        Format:
+            # Comments start with #
+            source1 -> target1
+            source2 -> target2
+            ...
+        
+        Returns:
+            (ground_truth_edges, all_variables)
+            ground_truth_edges: Set of (source, target) tuples
+            all_variables: Set of variable names (extracted from edges)
+        """
+        ground_truth_edges = set()
+        all_variables = set()
+        
+        with open(self.ground_truth_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                
+                # Skip comments and empty lines
+                if not line or line.startswith('#'):
+                    continue
+                
+                # Parse edge: "A -> B"
+                if '->' in line:
+                    parts = line.split('->')
+                    if len(parts) == 2:
+                        source = parts[0].strip()
+                        target = parts[1].strip()
+                        if source and target:
+                            ground_truth_edges.add((source, target))
+                            all_variables.add(source)
+                            all_variables.add(target)
         
         return ground_truth_edges, all_variables
     
@@ -164,15 +211,34 @@ class CausalGraphEvaluator:
         orientation_accuracy = correctly_oriented / (correctly_oriented + incorrectly_oriented) if (correctly_oriented + incorrectly_oriented) > 0 else 0
         
         # === 4. STRUCTURAL HAMMING DISTANCE (SHD) ===
-        # Count reversals
+        # According to standard definition (Gemini's clarification):
+        # 
+        # Skeleton SHD: Only considers edge existence (undirected)
+        #   SHD_skeleton = E_add + E_del
+        #   E_add (False Positive): edges in learned but not in GT (undirected)
+        #   E_del (False Negative): edges in GT but not in learned (undirected)
+        #
+        # Full SHD: Considers both edge existence and direction
+        #   SHD_full = E_add + E_del + E_rev
+        #   E_add: edges added (not in GT at all)
+        #   E_del: edges missing (in GT but not learned at all)
+        #   E_rev: edges with correct skeleton but wrong direction
+        
+        # Count reversals (edges with correct skeleton but wrong direction)
         reversals = 0
         for learned_edge in learned_edges:
             reversed_edge = (learned_edge[1], learned_edge[0])
             if reversed_edge in self.ground_truth_edges and learned_edge not in self.ground_truth_edges:
                 reversals += 1
         
-        # SHD = FP + FN - reversals (reversals counted in both FP and FN)
-        shd = directed_fp + directed_fn - reversals
+        # Skeleton SHD: undirected edge errors
+        skeleton_shd = undirected_fp + undirected_fn
+        
+        # Full SHD: directed edge errors (standard NeurIPS/ICLR metric)
+        # E_add = edges added (not in GT undirected graph)
+        # E_del = edges deleted (in GT undirected graph but not learned)
+        # E_rev = edges with correct skeleton but wrong direction
+        full_shd = undirected_fp + undirected_fn + reversals
         
         # Compile metrics
         metrics = {
@@ -197,9 +263,11 @@ class CausalGraphEvaluator:
             'correctly_oriented': correctly_oriented,
             'incorrectly_oriented': incorrectly_oriented,
             
-            # SHD
-            'shd': shd,
-            'reversals': reversals,
+            # SHD (Structural Hamming Distance)
+            'skeleton_shd': skeleton_shd,  # Only edge existence (undirected)
+            'full_shd': full_shd,          # Edge existence + direction (standard metric)
+            'shd': full_shd,               # Default to full_shd for backward compatibility
+            'reversals': reversals,        # Number of edges with wrong direction
             
             # Counts
             'learned_edges': len(learned_edges),
@@ -235,9 +303,14 @@ class CausalGraphEvaluator:
         print(f"Correctly Oriented:   {metrics['correctly_oriented']}")
         print(f"Incorrectly Oriented: {metrics['incorrectly_oriented']}")
         
-        print("\n--- STRUCTURAL HAMMING DISTANCE ---")
-        print(f"SHD:       {metrics['shd']}")
-        print(f"Reversals: {metrics['reversals']}")
+        print("\n--- STRUCTURAL HAMMING DISTANCE (SHD) ---")
+        print(f"Skeleton SHD:  {metrics['skeleton_shd']}  (E_add + E_del, undirected)")
+        print(f"  E_add (FP):  {metrics['undirected_fp']}  (edges added)")
+        print(f"  E_del (FN):  {metrics['undirected_fn']}  (edges missing)")
+        print(f"\nFull SHD:      {metrics['full_shd']}  (E_add + E_del + E_rev, directed)")
+        print(f"  E_add (FP):  {metrics['undirected_fp']}  (edges added)")
+        print(f"  E_del (FN):  {metrics['undirected_fn']}  (edges missing)")
+        print(f"  E_rev:       {metrics['reversals']}  (edges reversed)")
         
         print("\n--- SUMMARY ---")
         print(f"Learned Edges:      {metrics['learned_edges']}")
@@ -362,9 +435,14 @@ class CausalGraphEvaluator:
             f.write(f"  Correct:        {metrics['correctly_oriented']}\n")
             f.write(f"  Incorrect:      {metrics['incorrectly_oriented']}\n\n")
             
-            f.write("Structural Hamming Distance\n")
-            f.write(f"  SHD:            {metrics['shd']}\n")
-            f.write(f"  Reversals:      {metrics['reversals']}\n\n")
+            f.write("Structural Hamming Distance (SHD)\n")
+            f.write(f"  Skeleton SHD:   {metrics['skeleton_shd']} (E_add + E_del, undirected)\n")
+            f.write(f"    E_add (FP):   {metrics['undirected_fp']}\n")
+            f.write(f"    E_del (FN):   {metrics['undirected_fn']}\n")
+            f.write(f"  Full SHD:       {metrics['full_shd']} (E_add + E_del + E_rev, directed)\n")
+            f.write(f"    E_add (FP):   {metrics['undirected_fp']}\n")
+            f.write(f"    E_del (FN):   {metrics['undirected_fn']}\n")
+            f.write(f"    E_rev:        {metrics['reversals']}\n\n")
             
             f.write("Summary\n")
             f.write(f"  Learned Edges:  {metrics['learned_edges']}\n")
