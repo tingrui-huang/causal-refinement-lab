@@ -219,6 +219,92 @@ class PriorBuilder:
         
         return direction_prior
     
+    def build_random_direction_prior(self, fci_csv_path: str, 
+                                      random_range: Tuple[float, float] = (0.0, 0.5),
+                                      seed: Optional[int] = None) -> torch.Tensor:
+        """
+        Build RANDOM direction prior for control experiment
+        
+        This creates random asymmetric initial weights to test if LLM is a 
+        "blind perturbation" (just breaking symmetry) or an "intelligent guide"
+        (pointing in the right direction).
+        
+        Hypothesis:
+            - If random noise works as well as LLM -> LLM is just "blind perturbation"
+            - If random noise has low orientation accuracy -> LLM is "intelligent guide"
+        
+        Args:
+            fci_csv_path: Path to FCI edges CSV (to know which pairs to randomize)
+            random_range: Range for random weights, e.g., (0.0, 0.5)
+            seed: Random seed for reproducibility
+        
+        Returns:
+            Random direction prior matrix (n_states, n_states)
+        """
+        print("\n" + "=" * 70)
+        print("BUILDING RANDOM DIRECTION PRIOR (CONTROL EXPERIMENT)")
+        print("=" * 70)
+        print(f"Random range: {random_range}")
+        print(f"Random seed: {seed}")
+        
+        if seed is not None:
+            torch.manual_seed(seed)
+        
+        # Initialize with zeros
+        direction_prior = torch.zeros(self.n_states, self.n_states)
+        
+        # Load FCI edges
+        df_fci = pd.read_csv(fci_csv_path)
+        print(f"Loaded {len(df_fci)} edges from FCI")
+        
+        # Determine column names
+        if 'Source' in df_fci.columns and 'Target' in df_fci.columns:
+            source_col, target_col = 'Source', 'Target'
+        elif 'source' in df_fci.columns and 'target' in df_fci.columns:
+            source_col, target_col = 'source', 'target'
+        else:
+            source_col, target_col = df_fci.columns[0], df_fci.columns[1]
+        
+        edge_count = 0
+        
+        # For each FCI edge, assign RANDOM asymmetric weights
+        for _, row in df_fci.iterrows():
+            var_a = row[source_col]
+            var_b = row[target_col]
+            
+            # Check if variables exist
+            if var_a not in self.var_structure['var_to_states']:
+                continue
+            if var_b not in self.var_structure['var_to_states']:
+                continue
+            
+            # Get state indices
+            states_a = self.var_structure['var_to_states'][var_a]
+            states_b = self.var_structure['var_to_states'][var_b]
+            
+            # Assign RANDOM weights for A -> B
+            for i in states_a:
+                for j in states_b:
+                    direction_prior[i, j] = torch.rand(1).item() * (random_range[1] - random_range[0]) + random_range[0]
+            
+            # Assign DIFFERENT RANDOM weights for B -> A (asymmetric!)
+            for i in states_b:
+                for j in states_a:
+                    direction_prior[i, j] = torch.rand(1).item() * (random_range[1] - random_range[0]) + random_range[0]
+            
+            edge_count += 1
+        
+        print(f"\nRandom direction prior statistics:")
+        print(f"  Edges randomized: {edge_count}")
+        print(f"  Non-zero weights: {(direction_prior > 0).sum().item()}")
+        print(f"  Mean weight: {direction_prior[direction_prior > 0].mean().item():.4f}")
+        print(f"  Min weight: {direction_prior[direction_prior > 0].min().item():.4f}")
+        print(f"  Max weight: {direction_prior[direction_prior > 0].max().item():.4f}")
+        print("\n[WARNING] This is a CONTROL experiment with random priors!")
+        print("   Expected result: Unresolved ratio -> 0%, but Orientation accuracy ~50%")
+        
+        return direction_prior
+    
     def build_normal_penalty_weights(self, normal_weight: float = 0.1, 
                                      abnormal_weight: float = 1.0,
                                      normal_keyword: str = 'Normal') -> torch.Tensor:
@@ -338,7 +424,8 @@ class PriorBuilder:
         return blocks
     
     def get_all_priors(self, fci_skeleton_path: str, llm_direction_path: str = None, 
-                      use_llm_prior: bool = True) -> Dict[str, torch.Tensor]:
+                      use_llm_prior: bool = True, use_random_prior: bool = False,
+                      random_seed: Optional[int] = 42) -> Dict[str, torch.Tensor]:
         """
         Convenience method to build all priors at once
         
@@ -352,6 +439,8 @@ class PriorBuilder:
                                Can be None if use_llm_prior=False
             use_llm_prior: Whether to use LLM direction prior (default: True)
                           If False, uses uniform initialization (0.5 for all allowed edges)
+            use_random_prior: Whether to use RANDOM direction prior (control experiment)
+            random_seed: Random seed for reproducibility (default: 42)
         
         Returns:
             Dictionary with all prior structures
@@ -360,7 +449,15 @@ class PriorBuilder:
         skeleton_mask = self.build_skeleton_mask_from_fci(fci_skeleton_path)
         
         # Build direction prior
-        if use_llm_prior and llm_direction_path:
+        if use_random_prior:
+            # CONTROL EXPERIMENT: Random direction prior
+            print("\n[CONTROL EXPERIMENT] Using RANDOM direction prior")
+            direction_prior = self.build_random_direction_prior(
+                fci_skeleton_path, 
+                random_range=(0.0, 0.5),
+                seed=random_seed
+            )
+        elif use_llm_prior and llm_direction_path:
             # Build direction prior from FCI+LLM hybrid (soft initialization)
             direction_prior = self.build_direction_prior_from_llm(llm_direction_path)
             print("\n[USING LLM DIRECTION PRIOR]")
