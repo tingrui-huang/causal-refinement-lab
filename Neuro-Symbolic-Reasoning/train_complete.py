@@ -63,7 +63,9 @@ def train_complete(config: dict):
     priors = prior_builder.get_all_priors(
         fci_skeleton_path=config['fci_skeleton_path'],  # Pure FCI for hard mask
         llm_direction_path=config.get('llm_direction_path'),  # FCI+LLM for soft direction (optional)
-        use_llm_prior=config.get('use_llm_prior', True)  # Whether to use LLM prior
+        use_llm_prior=config.get('use_llm_prior', True),  # Whether to use LLM prior
+        use_random_prior=config.get('use_random_prior', False),  # Whether to use random prior (control experiment)
+        random_seed=config.get('random_seed', 42)  # Random seed for reproducibility
     )
     
     # === 3. INITIALIZE MODEL ===
