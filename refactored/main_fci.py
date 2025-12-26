@@ -99,13 +99,17 @@ class FCIPipeline:
         self.reporter.save_text_report(self.graph, model_name="FCI")
 
         self.reporter.save_edge_list(self.graph, model_name="FCI")
-        filename = f"causal_graph_{self.model_name}_{self.timestamp}"
-        self.visualizer.visualize(self.graph, 
-                                 title="Causal Graph (FCI Algorithm - PAG)",
-                                 filename=filename,
-                                 save_only=False,
-                                 node_color='lightyellow',
-                                 edge_color='red')
+        
+        # Skip visualization for Tuebingen dataset (only 2 nodes, not informative)
+        from config import DATASET
+        if not DATASET.lower().startswith('tuebingen'):
+            filename = f"causal_graph_{self.model_name}_{self.timestamp}"
+            self.visualizer.visualize(self.graph, 
+                                     title="Causal Graph (FCI Algorithm - PAG)",
+                                     filename=filename,
+                                     save_only=False,
+                                     node_color='lightyellow',
+                                     edge_color='red')
         
         print(f"{'='*60}")
 
