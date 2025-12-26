@@ -214,14 +214,16 @@ class FCILLMPipeline:
         # Save edge list
         self.reporter.save_edge_list(self.graph, model_name="FCI_LLM_GPT35")
         
-        # Save visualization
-        filename = f"causal_graph_fci_llm_gpt35_{self.timestamp}"
-        self.visualizer.visualize(self.graph, 
-                                 title="Causal Graph (FCI + LLM GPT-3.5)",
-                                 filename=filename,
-                                 save_only=False,
-                                 node_color='lightgreen',
-                                 edge_color='darkgreen')
+        # Save visualization (skip for Tuebingen dataset - only 2 nodes)
+        from config import DATASET
+        if not DATASET.lower().startswith('tuebingen'):
+            filename = f"causal_graph_fci_llm_gpt35_{self.timestamp}"
+            self.visualizer.visualize(self.graph, 
+                                     title="Causal Graph (FCI + LLM GPT-3.5)",
+                                     filename=filename,
+                                     save_only=False,
+                                     node_color='lightgreen',
+                                     edge_color='darkgreen')
         
         print(f"{'='*60}")
 

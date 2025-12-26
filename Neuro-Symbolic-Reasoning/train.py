@@ -244,7 +244,9 @@ def main():
                 history['loss_total'].append(loss.item())
                 history['loss_reconstruction'].append(loss_dict['reconstruction'].item())
                 history['loss_group_lasso'].append(loss_dict['weighted_group_lasso'].item())
-                history['loss_cycle'].append(loss_dict['cycle_consistency'].item())
+                # cycle_consistency is already a float, not a tensor
+                cycle_loss = loss_dict['cycle_consistency']
+                history['loss_cycle'].append(cycle_loss.item() if hasattr(cycle_loss, 'item') else cycle_loss)
                 history['unresolved_ratio'].append(bidir_stats['unresolved_ratio'])
                 history['unresolved_count'].append(bidir_stats['unresolved'])
                 history['resolved_count'].append(bidir_stats['resolved'])
@@ -254,11 +256,13 @@ def main():
                 history['block_sparsity'].append(sparsity_stats['block_sparsity'])
                 
                 # Print comprehensive log
+                cycle_loss_val = loss_dict['cycle_consistency']
+                cycle_loss_val = cycle_loss_val.item() if hasattr(cycle_loss_val, 'item') else cycle_loss_val
                 print(f"\nEpoch {epoch+1:3d}/{n_epochs}")
                 print(f"  Loss: {loss.item():.4f} "
                       f"(Recon: {loss_dict['reconstruction'].item():.4f}, "
                       f"Lasso: {loss_dict['weighted_group_lasso'].item():.4f}, "
-                      f"Cycle: {loss_dict['cycle_consistency'].item():.4f})")
+                      f"Cycle: {cycle_loss_val:.4f})")
                 print(f"  Direction: Unresolved {bidir_stats['unresolved_ratio']*100:.1f}% "
                       f"({bidir_stats['unresolved']}/{bidir_stats['total_pairs']} pairs)")
                 print(f"  Sparsity: Overall {sparsity_stats['overall_sparsity']*100:.1f}%, "

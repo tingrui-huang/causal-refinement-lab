@@ -54,11 +54,9 @@ def run_command(command, cwd=None, description="", env=None):
     
     # Print output (handle encoding issues)
     if result.stdout:
-        try:
-            print(result.stdout)
-        except UnicodeEncodeError:
-            # Fallback: print with error handling
-            print(result.stdout.encode('utf-8', errors='replace').decode('utf-8', errors='replace'))
+        # Just let it print directly without capturing encoding errors
+        sys.stdout.buffer.write(result.stdout.encode('utf-8', errors='replace'))
+        sys.stdout.buffer.flush()
     
     if result.returncode != 0:
         print(f"\n[ERROR] Command failed with exit code {result.returncode}")
@@ -137,6 +135,10 @@ def run_llm():
         latest_file = max(existing_files, key=lambda p: p.stat().st_mtime)
         print(f"[INFO] Found existing LLM results: {latest_file.name}")
         print(f"[INFO] Skipping LLM call. Delete this file to regenerate.")
+        
+        # Still evaluate the existing LLM output
+        evaluate_llm_output()
+        
         return True
     
     print(f"[INFO] No existing results found. Calling {llm_name}...")
@@ -149,8 +151,74 @@ def run_llm():
     
     if success:
         print(f"\n[OK] LLM ({llm_name}) completed successfully")
+        
+        # Evaluate LLM output
+        evaluate_llm_output()
     
     return success
+
+
+def evaluate_llm_output():
+    """Evaluate LLM output against ground truth"""
+    try:
+        # Import config
+        sys.path.insert(0, str(Path(__file__).parent.parent))
+        from config import DATASET, FCI_OUTPUT_DIR, get_current_dataset_config
+        
+        dataset_config = get_current_dataset_config()
+        
+        # Find latest LLM output
+        output_dir = FCI_OUTPUT_DIR / DATASET
+        if not output_dir.exists():
+            print("\n[INFO] No LLM output directory found, skipping LLM evaluation")
+            return True
+        
+        llm_files = list(output_dir.glob('edges_FCI_LLM_*.csv'))
+        if not llm_files:
+            print("\n[INFO] No LLM output files found, skipping LLM evaluation")
+            return True
+        
+        # Get the most recent LLM output
+        latest_llm = max(llm_files, key=lambda p: p.stat().st_mtime)
+        
+        # Get ground truth path
+        ground_truth_path = dataset_config.get('ground_truth_path')
+        ground_truth_type = dataset_config.get('ground_truth_type', 'bif')
+        
+        if not ground_truth_path or not Path(ground_truth_path).exists():
+            print("\n[INFO] Ground truth not found, skipping LLM evaluation")
+            return True
+        
+        print("\n" + "=" * 80)
+        print("STEP 2.5: EVALUATING LLM OUTPUT AGAINST GROUND TRUTH")
+        print("=" * 80)
+        print(f"[INFO] Evaluating: {latest_llm.name}")
+        
+        # Import and use the standalone evaluator
+        sys.path.insert(0, str(Path(__file__).parent / 'modules'))
+        from evaluator import evaluate_llm_output as eval_llm
+        
+        # Evaluate LLM output
+        metrics = eval_llm(
+            llm_csv_path=str(latest_llm),
+            ground_truth_path=str(ground_truth_path),
+            ground_truth_type=ground_truth_type,
+            output_dir=str(output_dir)
+        )
+        
+        print(f"\n[OK] LLM evaluation completed")
+        print(f"  Edge F1:         {metrics['edge_f1']:.1%}")
+        print(f"  Directed F1:     {metrics['directed_f1']:.1%}")
+        print(f"  Orientation Acc: {metrics['orientation_accuracy']:.1%}")
+        print(f"  Full SHD:        {metrics['full_shd']}")
+        
+        return True
+    
+    except Exception as e:
+        print(f"\n[ERROR] LLM evaluation failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
 
 
 def run_fci_evaluation():
