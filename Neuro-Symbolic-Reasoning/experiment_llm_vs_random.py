@@ -18,22 +18,42 @@ Expected Results:
 
 import sys
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
+# Import config to get dataset paths
+import config
 from train_complete import train_complete
+
+# Get alarm dataset configuration
+alarm_config = config.DATASET_CONFIGS['alarm']
+
+# Auto-detect latest FCI and LLM files
+fci_skeleton_path = config._auto_detect_latest_file('edges_FCI_*.csv', config.FCI_OUTPUT_DIR / 'alarm')
+llm_direction_path = config._auto_detect_latest_file('edges_FCI_LLM_*.csv', config.FCI_OUTPUT_DIR / 'alarm')
+
+print("=" * 80)
+print("USING FILES:")
+print("=" * 80)
+print(f"Data path:       {alarm_config['data_path']}")
+print(f"Metadata path:   {alarm_config['metadata_path']}")
+print(f"FCI skeleton:    {fci_skeleton_path}")
+print(f"LLM direction:   {llm_direction_path}")
+print(f"Ground truth:    {alarm_config['ground_truth_path']}")
+print("=" * 80)
 
 # Shared configuration
 base_config = {
-    'data_path': 'data/alarm/alarm_data_10000.csv',
-    'metadata_path': 'data/alarm/metadata.json',
-    'fci_skeleton_path': 'data/alarm/edges_FCI_20251207_230824.csv',
-    'llm_direction_path': 'data/alarm/edges_Hybrid_FCI_LLM_20251207_230956.csv',
-    'ground_truth_path': 'data/alarm/alarm.bif',
-    'n_epochs': 200,
+    'data_path': str(alarm_config['data_path']),
+    'metadata_path': str(alarm_config['metadata_path']),
+    'fci_skeleton_path': str(fci_skeleton_path) if fci_skeleton_path else None,
+    'llm_direction_path': str(llm_direction_path) if llm_direction_path else None,
+    'ground_truth_path': str(alarm_config['ground_truth_path']),
+    'ground_truth_type': 'bif',
+    'n_epochs': 1000,  # Reduced from 1000 for faster testing
     'learning_rate': 0.01,
     'n_hops': 1,
-    'lambda_group': 0.01,
-    'lambda_cycle': 0.001,
+    'lambda_group': 0.00001,  # Back to normal values
+    'lambda_cycle': 0.0001,  # Back to normal values
     'monitor_interval': 20,
     'edge_threshold': 0.1,
 }

@@ -220,22 +220,31 @@ class PriorBuilder:
         return direction_prior
     
     def build_random_direction_prior(self, fci_csv_path: str, 
-                                      random_range: Tuple[float, float] = (0.0, 0.5),
+                                      high_confidence: float = 0.7,
+                                      low_confidence: float = 0.3,
                                       seed: Optional[int] = None) -> torch.Tensor:
         """
         Build RANDOM direction prior for control experiment
         
-        This creates random asymmetric initial weights to test if LLM is a 
-        "blind perturbation" (just breaking symmetry) or an "intelligent guide"
-        (pointing in the right direction).
+        CRITICAL CHANGE: Now uses SAME magnitude as LLM (0.7/0.3), only direction is random.
+        This ensures fair comparison - same "energy", only direction differs.
+        
+        For each edge pair (A, B):
+            - Randomly choose: A->B strong OR B->A strong (50/50 chance)
+            - Strong direction: high_confidence (0.7, same as LLM)
+            - Weak direction: low_confidence (0.3, same as LLM)
+        
+        This tests if LLM is a "blind perturbation" (just breaking symmetry) or 
+        an "intelligent guide" (pointing in the right direction).
         
         Hypothesis:
-            - If random noise works as well as LLM -> LLM is just "blind perturbation"
-            - If random noise has low orientation accuracy -> LLM is "intelligent guide"
+            - If random direction works as well as LLM -> LLM is just "blind perturbation"
+            - If random direction has low orientation accuracy (~50%) -> LLM is "intelligent guide"
         
         Args:
             fci_csv_path: Path to FCI edges CSV (to know which pairs to randomize)
-            random_range: Range for random weights, e.g., (0.0, 0.5)
+            high_confidence: Weight for strong direction (default: 0.7, same as LLM)
+            low_confidence: Weight for weak direction (default: 0.3, same as LLM)
             seed: Random seed for reproducibility
         
         Returns:
@@ -244,8 +253,10 @@ class PriorBuilder:
         print("\n" + "=" * 70)
         print("BUILDING RANDOM DIRECTION PRIOR (CONTROL EXPERIMENT)")
         print("=" * 70)
-        print(f"Random range: {random_range}")
+        print(f"High confidence (strong direction): {high_confidence}")
+        print(f"Low confidence (weak direction): {low_confidence}")
         print(f"Random seed: {seed}")
+        print("\n[FAIR COMPARISON] Same magnitude as LLM, only direction is random")
         
         if seed is not None:
             torch.manual_seed(seed)
@@ -266,8 +277,10 @@ class PriorBuilder:
             source_col, target_col = df_fci.columns[0], df_fci.columns[1]
         
         edge_count = 0
+        forward_strong_count = 0
+        backward_strong_count = 0
         
-        # For each FCI edge, assign RANDOM asymmetric weights
+        # For each FCI edge, randomly assign strong/weak directions
         for _, row in df_fci.iterrows():
             var_a = row[source_col]
             var_b = row[target_col]
@@ -282,26 +295,41 @@ class PriorBuilder:
             states_a = self.var_structure['var_to_states'][var_a]
             states_b = self.var_structure['var_to_states'][var_b]
             
-            # Assign RANDOM weights for A -> B
+            # Randomly decide which direction is strong (50/50 chance)
+            if torch.rand(1).item() > 0.5:
+                # A -> B is strong, B -> A is weak
+                forward_weight = high_confidence
+                backward_weight = low_confidence
+                forward_strong_count += 1
+            else:
+                # B -> A is strong, A -> B is weak
+                forward_weight = low_confidence
+                backward_weight = high_confidence
+                backward_strong_count += 1
+            
+            # Assign weights for A -> B
             for i in states_a:
                 for j in states_b:
-                    direction_prior[i, j] = torch.rand(1).item() * (random_range[1] - random_range[0]) + random_range[0]
+                    direction_prior[i, j] = forward_weight
             
-            # Assign DIFFERENT RANDOM weights for B -> A (asymmetric!)
+            # Assign weights for B -> A
             for i in states_b:
                 for j in states_a:
-                    direction_prior[i, j] = torch.rand(1).item() * (random_range[1] - random_range[0]) + random_range[0]
+                    direction_prior[i, j] = backward_weight
             
             edge_count += 1
         
         print(f"\nRandom direction prior statistics:")
-        print(f"  Edges randomized: {edge_count}")
+        print(f"  Total edge pairs: {edge_count}")
+        print(f"  Forward strong (A->B): {forward_strong_count} ({forward_strong_count/edge_count*100:.1f}%)")
+        print(f"  Backward strong (B->A): {backward_strong_count} ({backward_strong_count/edge_count*100:.1f}%)")
         print(f"  Non-zero weights: {(direction_prior > 0).sum().item()}")
         print(f"  Mean weight: {direction_prior[direction_prior > 0].mean().item():.4f}")
-        print(f"  Min weight: {direction_prior[direction_prior > 0].min().item():.4f}")
-        print(f"  Max weight: {direction_prior[direction_prior > 0].max().item():.4f}")
-        print("\n[WARNING] This is a CONTROL experiment with random priors!")
+        print(f"  High confidence weights: {(direction_prior == high_confidence).sum().item()}")
+        print(f"  Low confidence weights: {(direction_prior == low_confidence).sum().item()}")
+        print("\n[CONTROL EXPERIMENT] Random direction with same magnitude as LLM")
         print("   Expected result: Unresolved ratio -> 0%, but Orientation accuracy ~50%")
+        print("   (Because directions are random, not guided by domain knowledge)")
         
         return direction_prior
     
@@ -454,7 +482,8 @@ class PriorBuilder:
             print("\n[CONTROL EXPERIMENT] Using RANDOM direction prior")
             direction_prior = self.build_random_direction_prior(
                 fci_skeleton_path, 
-                random_range=(0.0, 0.5),
+                high_confidence=0.7,  # Same as LLM
+                low_confidence=0.3,   # Same as LLM
                 seed=random_seed
             )
         elif use_llm_prior and llm_direction_path:
