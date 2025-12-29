@@ -156,7 +156,8 @@ def main():
     
     loss_computer = LossComputer(
         block_structure=priors['blocks'],
-        penalty_weights=priors['penalty_weights']
+        penalty_weights=priors['penalty_weights'],
+        skeleton_mask=priors['skeleton_mask']  # Add skeleton mask for preservation loss
     )
     
     optimizer = optim.Adam(
@@ -209,7 +210,8 @@ def main():
             targets=data,
             adjacency=adjacency,
             lambda_group=cfg['lambda_group_lasso'],
-            lambda_cycle=cfg['lambda_cycle']
+            lambda_cycle=cfg['lambda_cycle'],
+            lambda_skeleton=cfg.get('lambda_skeleton', 0.1)  # Default: 0.1
         )
         loss = loss_dict['total']
         
