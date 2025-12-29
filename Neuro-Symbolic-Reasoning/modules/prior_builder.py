@@ -279,6 +279,8 @@ class PriorBuilder:
         edge_count = 0
         forward_strong_count = 0
         backward_strong_count = 0
+
+        processed_pairs = set()
         
         # For each FCI edge, randomly assign strong/weak directions
         for _, row in df_fci.iterrows():
@@ -290,6 +292,11 @@ class PriorBuilder:
                 continue
             if var_b not in self.var_structure['var_to_states']:
                 continue
+
+            pair_key = tuple(sorted([var_a, var_b]))
+            if pair_key in processed_pairs:
+                continue
+            processed_pairs.add(pair_key)
             
             # Get state indices
             states_a = self.var_structure['var_to_states'][var_a]
@@ -453,7 +460,9 @@ class PriorBuilder:
     
     def get_all_priors(self, fci_skeleton_path: str, llm_direction_path: str = None, 
                       use_llm_prior: bool = True, use_random_prior: bool = False,
-                      random_seed: Optional[int] = 42) -> Dict[str, torch.Tensor]:
+                      random_seed: Optional[int] = 42,
+                      high_confidence: float = 0.7,
+                      low_confidence: float = 0.3) -> Dict[str, torch.Tensor]:
         """
         Convenience method to build all priors at once
         
@@ -482,13 +491,17 @@ class PriorBuilder:
             print("\n[CONTROL EXPERIMENT] Using RANDOM direction prior")
             direction_prior = self.build_random_direction_prior(
                 fci_skeleton_path, 
-                high_confidence=0.7,  # Same as LLM
-                low_confidence=0.3,   # Same as LLM
+                high_confidence=high_confidence,  # Use custom values
+                low_confidence=low_confidence,    # Use custom values
                 seed=random_seed
             )
         elif use_llm_prior and llm_direction_path:
             # Build direction prior from FCI+LLM hybrid (soft initialization)
-            direction_prior = self.build_direction_prior_from_llm(llm_direction_path)
+            direction_prior = self.build_direction_prior_from_llm(
+                llm_direction_path,
+                high_confidence=high_confidence,  # Use custom values
+                low_confidence=low_confidence     # Use custom values
+            )
             print("\n[USING LLM DIRECTION PRIOR]")
         else:
             # Uniform initialization: 0.5 for all allowed edges, 0.0 for forbidden

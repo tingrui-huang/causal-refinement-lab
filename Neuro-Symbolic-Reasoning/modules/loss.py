@@ -3,14 +3,28 @@ Loss Module - Phase 2
 
 The mathematical core of causal discovery.
 
-Three loss components:
+Four loss components:
 1. Reconstruction Loss: Auto-encoder style prediction
+   - Uses BCELoss with reduction='mean' (automatically normalized by n_states)
+   
 2. Weighted Group Lasso: Block-level sparsity with Normal protection
+   - Normalized by number of blocks (≈ n_vars²)
+   - Represents "average penalty per block"
+   
 3. Cycle Consistency Loss: Direction learning by penalizing bidirectional edges
+   - Normalized by number of variable pairs
+   - Represents "average cycle penalty per pair"
+   
+4. Skeleton Preservation Loss: Prevent FCI edges from vanishing
+   - Normalized by number of skeleton edges
+   - Represents "average squared error per skeleton edge"
 
-Critical Implementation Note:
-- Penalty weights MUST be inside the norm: ||W ⊙ P||_F
-- NOT: ||W||_F * P (this is wrong!)
+Critical Implementation Notes:
+- Penalty weights MUST be inside the norm: ||W ⊙ P||_F, NOT: ||W||_F * P
+- All losses are normalized to represent "per-element averages" for scale-invariance
+  * This ensures Andes (223 vars) and Alarm (37 vars) have comparable loss magnitudes
+  * Lambda hyperparameters now have consistent effects across different dataset sizes
+  * Without normalization, larger networks would require drastically different lambda values
 """
 
 import torch
@@ -26,7 +40,8 @@ class LossComputer:
     enforce causal structure learning.
     """
     
-    def __init__(self, block_structure: List[Dict], penalty_weights: torch.Tensor):
+    def __init__(self, block_structure: List[Dict], penalty_weights: torch.Tensor, 
+                 skeleton_mask: torch.Tensor = None):
         """
         Initialize loss computer with prior knowledge
         
@@ -38,9 +53,23 @@ class LossComputer:
             penalty_weights: (105, 105) tensor with weights for each connection
                 Normal→Normal: 0.1 (low penalty, allow)
                 Others: 1.0 (high penalty, force sparsity)
+            skeleton_mask: (105, 105) binary mask from FCI (optional, for skeleton preservation)
         """
         self.block_structure = block_structure
         self.penalty_weights = penalty_weights
+        
+        # Store skeleton mask for skeleton preservation loss
+        self.skeleton_mask = skeleton_mask
+        
+        # Extract n_vars (number of variables) and n_states (number of one-hot states)
+        # n_vars is the number of unique variables in the block structure
+        unique_vars = set()
+        for block in block_structure:
+            var_a, var_b = block['var_pair']
+            unique_vars.add(var_a)
+            unique_vars.add(var_b)
+        self.n_vars = len(unique_vars)
+        self.n_states = penalty_weights.shape[0]  # Total one-hot states (e.g., 446 for Andes)
         
         # Build reverse block lookup for cycle consistency
         self.block_lookup = {}
@@ -54,10 +83,19 @@ class LossComputer:
         print("=" * 70)
         print("LOSS COMPUTER INITIALIZED (PHASE 2)")
         print("=" * 70)
+        print(f"Variables: {self.n_vars}")
+        print(f"One-hot states: {self.n_states}")
         print(f"Blocks: {len(block_structure)}")
         print(f"Penalty weights shape: {penalty_weights.shape}")
         print(f"Normal→Normal (0.1): {(penalty_weights == 0.1).sum().item()} connections")
         print(f"Others (1.0): {(penalty_weights == 1.0).sum().item()} connections")
+        if skeleton_mask is not None:
+            print(f"Skeleton mask provided: {int(skeleton_mask.sum().item())} edges to preserve")
+        print(f"[INFO] Loss normalization enabled:")
+        print(f"  - Group Lasso: normalized by {len(block_structure)} blocks")
+        print(f"  - Cycle Loss: normalized by number of pairs")
+        print(f"  - Skeleton Loss: normalized by number of skeleton edges")
+        print(f"  - This ensures scale-invariance across different dataset sizes")
     
     def reconstruction_loss(self, predictions: torch.Tensor, 
                            targets: torch.Tensor) -> torch.Tensor:
@@ -125,7 +163,12 @@ class LossComputer:
             
             total_penalty += block_norm
         
-        return total_penalty
+        # Normalize by number of blocks to make loss scale-invariant
+        # This ensures that Andes (223 vars) and Alarm (37 vars) have comparable loss magnitudes
+        # Rationale: The penalty is a sum over all blocks, and #blocks ≈ n_vars * (n_vars - 1)
+        # Normalizing by #blocks makes the loss represent "average penalty per block"
+        n_blocks = len(self.block_structure)
+        return total_penalty / n_blocks if n_blocks > 0 else total_penalty
     
     def cycle_consistency_loss(self, adjacency: torch.Tensor) -> torch.Tensor:
         """
@@ -179,14 +222,78 @@ class LossComputer:
             
             total_penalty += cycle_penalty
         
-        return total_penalty
+        # Normalize by number of variable pairs to make loss scale-invariant
+        # Rationale: The cycle penalty is a sum over all variable pairs, which grows as O(n_vars²)
+        # Normalizing by #pairs makes the loss represent "average cycle penalty per pair"
+        n_pairs = len(processed_pairs)
+        return total_penalty / n_pairs if n_pairs > 0 else total_penalty
+    
+    def skeleton_preservation_loss(self, adjacency: torch.Tensor) -> torch.Tensor:
+        """
+        Skeleton Preservation Loss: Prevent FCI edges from vanishing
+        
+        Goal: Force model to preserve edges identified by FCI (high recall constraint)
+        
+        Formula:
+        For each edge (i,j) in FCI skeleton:
+            Loss += (1 - (W_ij + W_ji))^2
+        
+        Why this works:
+        - FCI has high recall (finds true edges)
+        - But current loss allows W_ij and W_ji to both → 0
+        - This loss forces: W_ij + W_ji ≈ 1 for FCI edges
+        - Model must choose direction (A→B OR B→A), but cannot delete edge
+        
+        Mathematical intuition:
+        - If W_ij = 0.8, W_ji = 0.2 → sum = 1.0 → loss = 0 ✓
+        - If W_ij = 0.5, W_ji = 0.5 → sum = 1.0 → loss = 0 ✓
+        - If W_ij = 0.1, W_ji = 0.1 → sum = 0.2 → loss = 0.64 ✗ (penalized!)
+        - If W_ij = 0.0, W_ji = 0.0 → sum = 0.0 → loss = 1.0 ✗✗ (heavily penalized!)
+        
+        Args:
+            adjacency: (105, 105) adjacency matrix (sigmoid + masked)
+        
+        Returns:
+            Scalar loss value (sum over all FCI edges)
+        """
+        if self.skeleton_mask is None:
+            # No skeleton mask provided, return zero loss
+            return torch.tensor(0.0, device=adjacency.device)
+        
+        # Compute bidirectional edge strength: W_ij + W_ji
+        # This is symmetric: edge_sum[i,j] = W_ij + W_ji
+        edge_sum = adjacency + adjacency.T
+        
+        # Target: edge_sum should be 1.0 for all FCI edges
+        # We want to minimize (1 - edge_sum)^2 for skeleton edges
+        target = torch.ones_like(edge_sum)
+        
+        # Compute squared error for skeleton edges only
+        # skeleton_mask is symmetric (if i-j connected, then j-i also marked)
+        # So we can directly apply it
+        squared_error = (target - edge_sum) ** 2
+        
+        # Only penalize edges in the FCI skeleton
+        # Note: This will count each undirected edge twice (i->j and j->i)
+        # But that's fine - it just scales the loss uniformly
+        skeleton_loss = torch.sum(self.skeleton_mask * squared_error)
+        
+        # Normalize by number of skeleton edges to make loss magnitude reasonable
+        # Divide by 2 because skeleton is symmetric (each edge counted twice)
+        # This makes the loss represent "average squared error per skeleton edge"
+        n_skeleton_edges = self.skeleton_mask.sum() / 2
+        if n_skeleton_edges > 0:
+            skeleton_loss = skeleton_loss / (2 * n_skeleton_edges)
+        
+        return skeleton_loss
     
     def compute_total_loss(self, 
                           predictions: torch.Tensor,
                           targets: torch.Tensor,
                           adjacency: torch.Tensor,
                           lambda_group: float = 0.01,
-                          lambda_cycle: float = 0.001) -> Dict[str, torch.Tensor]:
+                          lambda_cycle: float = 0.001,
+                          lambda_skeleton: float = 0.1) -> Dict[str, torch.Tensor]:
         """
         Compute total loss with all components
         
@@ -196,6 +303,7 @@ class LossComputer:
             adjacency: (105, 105) adjacency matrix (sigmoid + masked)
             lambda_group: Weight for Group Lasso (default: 0.01)
             lambda_cycle: Weight for Cycle Consistency (default: 0.001)
+            lambda_skeleton: Weight for Skeleton Preservation (default: 0.1)
         
         Returns:
             Dictionary with all loss components:
@@ -203,24 +311,28 @@ class LossComputer:
                 'total': total_loss,
                 'reconstruction': recon_loss,
                 'weighted_group_lasso': group_loss,
-                'cycle_consistency': cycle_loss
+                'cycle_consistency': cycle_loss,
+                'skeleton_preservation': skeleton_loss
             }
         """
         # Compute individual losses
         loss_recon = self.reconstruction_loss(predictions, targets)
         loss_group = self.weighted_group_lasso_loss(adjacency)
         loss_cycle = self.cycle_consistency_loss(adjacency)
+        loss_skeleton = self.skeleton_preservation_loss(adjacency)
         
         # Total loss
         total_loss = (loss_recon + 
                      lambda_group * loss_group + 
-                     lambda_cycle * loss_cycle)
+                     lambda_cycle * loss_cycle +
+                     lambda_skeleton * loss_skeleton)
         
         return {
             'total': total_loss,
             'reconstruction': loss_recon,
             'weighted_group_lasso': loss_group,
-            'cycle_consistency': loss_cycle
+            'cycle_consistency': loss_cycle,
+            'skeleton_preservation': loss_skeleton
         }
 
 
@@ -339,6 +451,102 @@ def test_cycle_consistency():
     print("\n[PASS] TEST PASSED: Cycle Consistency math is correct!")
 
 
+def test_skeleton_preservation():
+    """
+    Unit test for Skeleton Preservation Loss
+    """
+    print("\n" + "=" * 70)
+    print("UNIT TEST: Skeleton Preservation Loss")
+    print("=" * 70)
+    
+    # Create a 4x4 adjacency matrix
+    adjacency = torch.zeros(4, 4)
+    
+    # Case 1: Edge with good direction choice (0.8 + 0.2 = 1.0)
+    adjacency[0, 1] = 0.8  # A → B strong
+    adjacency[1, 0] = 0.2  # B → A weak
+    
+    # Case 2: Edge with both directions weak (0.1 + 0.1 = 0.2, should be penalized)
+    adjacency[2, 3] = 0.1  # C → D weak
+    adjacency[3, 2] = 0.1  # D → C weak
+    
+    # Create skeleton mask: mark edges (0,1) and (2,3) as FCI edges
+    skeleton_mask = torch.zeros(4, 4)
+    skeleton_mask[0, 1] = 1
+    skeleton_mask[1, 0] = 1  # Symmetric
+    skeleton_mask[2, 3] = 1
+    skeleton_mask[3, 2] = 1  # Symmetric
+    
+    # Create dummy blocks and penalty weights
+    blocks = []
+    penalty_weights = torch.ones(4, 4)
+    
+    # Create loss computer with skeleton mask
+    loss_computer = LossComputer(blocks, penalty_weights, skeleton_mask=skeleton_mask)
+    
+    # Compute skeleton preservation loss
+    skel_loss = loss_computer.skeleton_preservation_loss(adjacency)
+    
+    # Manual calculation:
+    # Edge (0,1): sum = 0.8 + 0.2 = 1.0 → (1 - 1.0)^2 = 0.0
+    # Edge (1,0): sum = 0.2 + 0.8 = 1.0 → (1 - 1.0)^2 = 0.0
+    # Edge (2,3): sum = 0.1 + 0.1 = 0.2 → (1 - 0.2)^2 = 0.64
+    # Edge (3,2): sum = 0.1 + 0.1 = 0.2 → (1 - 0.2)^2 = 0.64
+    # Total = (0.0 + 0.0 + 0.64 + 0.64) / (2 * 2 edges) = 1.28 / 4 = 0.32
+    
+    expected_loss = ((1.0 - 1.0)**2 + (1.0 - 1.0)**2 + 
+                     (1.0 - 0.2)**2 + (1.0 - 0.2)**2) / 4
+    
+    print(f"\nAdjacency matrix:")
+    print(adjacency)
+    print(f"\nSkeleton mask:")
+    print(skeleton_mask)
+    print(f"\nEdge sums (A→B + B→A):")
+    edge_sum = adjacency + adjacency.T
+    print(edge_sum)
+    print(f"\nExpected loss: {expected_loss:.6f}")
+    print(f"Computed loss: {skel_loss:.6f}")
+    print(f"Difference: {abs(expected_loss - skel_loss):.10f}")
+    
+    assert torch.allclose(skel_loss, torch.tensor(expected_loss), atol=1e-6), \
+        f"Skeleton loss mismatch! Expected {expected_loss}, got {skel_loss}"
+    
+    print("\n[PASS] TEST PASSED: Skeleton Preservation math is correct!")
+    
+    # Test 2: Verify it penalizes edge deletion
+    print("\n--- Test 2: Edge Deletion Penalty ---")
+    adjacency_deleted = torch.zeros(4, 4)
+    adjacency_deleted[0, 1] = 0.0  # Edge deleted!
+    adjacency_deleted[1, 0] = 0.0
+    
+    loss_deleted = loss_computer.skeleton_preservation_loss(adjacency_deleted)
+    print(f"Loss when edge (0,1) deleted: {loss_deleted:.6f}")
+    print(f"Loss when edge (0,1) preserved: {skel_loss:.6f}")
+    
+    assert loss_deleted > skel_loss, "Deleted edges should have higher loss!"
+    print("[PASS] Verified: Edge deletion is heavily penalized!")
+    
+    # Test 3: Verify it allows directional choice
+    print("\n--- Test 3: Directional Choice ---")
+    adjacency_choice1 = torch.zeros(4, 4)
+    adjacency_choice1[0, 1] = 0.9  # Strong A → B
+    adjacency_choice1[1, 0] = 0.1  # Weak B → A
+    
+    adjacency_choice2 = torch.zeros(4, 4)
+    adjacency_choice2[0, 1] = 0.1  # Weak A → B
+    adjacency_choice2[1, 0] = 0.9  # Strong B → A
+    
+    loss_choice1 = loss_computer.skeleton_preservation_loss(adjacency_choice1)
+    loss_choice2 = loss_computer.skeleton_preservation_loss(adjacency_choice2)
+    
+    print(f"Loss for A→B strong (0.9 + 0.1): {loss_choice1:.6f}")
+    print(f"Loss for B→A strong (0.1 + 0.9): {loss_choice2:.6f}")
+    
+    assert torch.allclose(loss_choice1, loss_choice2, atol=1e-6), \
+        "Both directional choices should have similar low loss!"
+    print("[PASS] Verified: Model can choose direction freely (as long as sum ≈ 1)!")
+
+
 if __name__ == "__main__":
     print("=" * 70)
     print("LOSS MODULE UNIT TESTS")
@@ -350,8 +558,11 @@ if __name__ == "__main__":
     # Test 2: Cycle Consistency
     test_cycle_consistency()
     
+    # Test 3: Skeleton Preservation (NEW!)
+    test_skeleton_preservation()
+    
     print("\n" + "=" * 70)
     print("ALL TESTS PASSED [SUCCESS]")
     print("=" * 70)
-    print("\nLoss module is ready for Phase 2 training!")
+    print("\nLoss module is ready for Phase 2 training with Skeleton Preservation!")
 

@@ -65,7 +65,9 @@ def train_complete(config: dict):
         llm_direction_path=config.get('llm_direction_path'),  # FCI+LLM for soft direction (optional)
         use_llm_prior=config.get('use_llm_prior', True),  # Whether to use LLM prior
         use_random_prior=config.get('use_random_prior', False),  # Whether to use random prior (control experiment)
-        random_seed=config.get('random_seed', 42)  # Random seed for reproducibility
+        random_seed=config.get('random_seed', 42),  # Random seed for reproducibility
+        high_confidence=config.get('high_confidence', 0.7),  # High confidence weight (customizable)
+        low_confidence=config.get('low_confidence', 0.3)  # Low confidence weight (customizable)
     )
     
     # === 3. INITIALIZE MODEL ===
@@ -80,7 +82,8 @@ def train_complete(config: dict):
     print("\n[4/6] Initializing Loss Computer...")
     loss_computer = LossComputer(
         block_structure=priors['blocks'],
-        penalty_weights=priors['penalty_weights']
+        penalty_weights=priors['penalty_weights'],
+        skeleton_mask=priors['skeleton_mask']  # Add skeleton mask for preservation loss
     )
     
     # === 5. SETUP TRAINING ===
@@ -187,6 +190,7 @@ def train_complete(config: dict):
         'loss_reconstruction': [],
         'loss_group_lasso': [],
         'loss_cycle': [],
+        'loss_skeleton': [],  # NEW: Skeleton preservation loss
         'unresolved_ratio': [],  # Renamed from bidirectional_ratio
         'overall_sparsity': [],
         'block_sparsity': [],
@@ -205,7 +209,8 @@ def train_complete(config: dict):
             targets=observations,
             adjacency=adjacency,
             lambda_group=config['lambda_group'],
-            lambda_cycle=config['lambda_cycle']
+            lambda_cycle=config['lambda_cycle'],
+            lambda_skeleton=config.get('lambda_skeleton', 0.1)  # Default: 0.1
         )
         
         # === BACKWARD PASS ===
@@ -241,6 +246,7 @@ def train_complete(config: dict):
                 history['loss_reconstruction'].append(losses['reconstruction'].item())
                 history['loss_group_lasso'].append(losses['weighted_group_lasso'].item())
                 history['loss_cycle'].append(losses['cycle_consistency'].item())
+                history['loss_skeleton'].append(losses['skeleton_preservation'].item())
                 history['unresolved_ratio'].append(unresolved_stats['unresolved_ratio'])
                 history['overall_sparsity'].append(sparsity_stats['overall_sparsity'])
                 history['block_sparsity'].append(sparsity_stats['block_sparsity'])
@@ -254,6 +260,7 @@ def train_complete(config: dict):
                 print(f"    Recon:        {losses['reconstruction'].item():8.4f}")
                 print(f"    Group Lasso:  {losses['weighted_group_lasso'].item():8.4f}")
                 print(f"    Cycle:        {losses['cycle_consistency'].item():8.4f}")
+                print(f"    Skeleton:     {losses['skeleton_preservation'].item():8.4f}")
                 print(f"  Symmetry Breaking (Direction Learning):")
                 print(f"    Unresolved (Symmetric): {unresolved_stats['unresolved']:3d} / {unresolved_stats['total_pairs']:3d} "
                       f"({unresolved_stats['unresolved_ratio']*100:5.1f}%) [Want: DOWN]")

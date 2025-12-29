@@ -30,6 +30,7 @@ N_HOPS = unified_config.N_HOPS
 BATCH_SIZE = unified_config.BATCH_SIZE
 LAMBDA_GROUP_LASSO = unified_config.LAMBDA_GROUP_LASSO
 LAMBDA_CYCLE = unified_config.LAMBDA_CYCLE
+LAMBDA_SKELETON = unified_config.LAMBDA_SKELETON  # NEW: Skeleton preservation
 THRESHOLD = unified_config.THRESHOLD
 LOG_INTERVAL = unified_config.LOG_INTERVAL
 VERBOSE = unified_config.VERBOSE
@@ -101,6 +102,7 @@ def print_config():
     print(f"  N Hops:            {cfg['n_hops']}")
     print(f"  Lambda Lasso:      {cfg['lambda_group_lasso']}")
     print(f"  Lambda Cycle:      {cfg['lambda_cycle']}")
+    print(f"  Lambda Skeleton:   {cfg.get('lambda_skeleton', 0.1)}")
     print(f"  Threshold:         {cfg['threshold']}")
     
     print("\nOutput Settings:")
@@ -172,3 +174,4 @@ if __name__ == "__main__":
         validate_training_config()
     except Exception as e:
         print(f"[ERROR] {e}")
+
