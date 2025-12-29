@@ -69,6 +69,7 @@ BATCH_SIZE = None  # None = full batch
 # Regularization
 LAMBDA_GROUP_LASSO = 0.01  # Group lasso penalty weight
 LAMBDA_CYCLE = 0.0005    # Cycle consistency penalty weight
+LAMBDA_SKELETON = 0.1    # Skeleton preservation penalty weight (NEW!)
 # alarm is 0.01, 0.005, insurance is 0.001,0.05, different datasets have different configurations.
 # Sachs for these two should be as much lower as possible, like 0 and 0.001
 # child is 0.005, 0,.005
@@ -411,6 +412,7 @@ def get_training_config():
         'batch_size': BATCH_SIZE,
         'lambda_group_lasso': LAMBDA_GROUP_LASSO,
         'lambda_cycle': LAMBDA_CYCLE,
+        'lambda_skeleton': LAMBDA_SKELETON,  # NEW: Skeleton preservation
         'threshold': THRESHOLD,
         
         # Output
@@ -466,6 +468,7 @@ def print_config():
     print(f"  Learning Rate: {LEARNING_RATE}")
     print(f"  Lambda Lasso: {LAMBDA_GROUP_LASSO}")
     print(f"  Lambda Cycle: {LAMBDA_CYCLE}")
+    print(f"  Lambda Skeleton: {LAMBDA_SKELETON}")
     print(f"  Threshold: {THRESHOLD}")
     print(f"  Results: {TRAINING_RESULTS_DIR}")
     
