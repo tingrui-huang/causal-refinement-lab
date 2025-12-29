@@ -94,6 +94,10 @@ def run_experiment_for_dataset(dataset_name: str,
         lambda_group = 0.01
         lambda_cycle = 0.001
         edge_threshold = 0.1
+    elif dataset_name == 'insurance':
+        lambda_group = 0.01
+        lambda_cycle = 0.001
+        edge_threshold = 0.08
     else:
         # Default values
         lambda_group = 0.01
@@ -319,20 +323,20 @@ def main():
     #   datasets = ['alarm', 'sachs', 'andes']  # 跑三个
     #
     # 可选数据集：'alarm', 'sachs', 'andes', 'child', 'hailfinder', 'insurance', 'win95pts'
-    datasets = ['child']  # ← 改这里！
+    datasets = ['alarm']  # ← 改这里！
     
     # 选择要运行的实验类型
     # 'both'   - 运行 LLM 和 Random 两个实验（完整对比）
     # 'llm'    - 只运行 LLM Prior 实验
     # 'random' - 只运行 Random Prior 实验
-    run_mode = 'random'  # ← 改这里！选择 'both', 'llm', 或 'random'
+    run_mode = 'both'  # ← 改这里！选择 'both', 'llm', 或 'random'
     
     # Prior 权重配置
     high_confidence = 0.9  # 强方向的权重（0.5-1.0）
     low_confidence = 0.1   # 弱方向的权重（0.0-0.5）
     
     # 训练轮数
-    n_epochs = 200
+    n_epochs = 1000
     # ← 改这里！(推荐: sachs=300, alarm=1000, andes=1500,hailfinder=1000 )
     # ============================================================================
     

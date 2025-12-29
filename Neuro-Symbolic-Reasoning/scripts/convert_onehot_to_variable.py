@@ -84,11 +84,15 @@ def convert_onehot_to_variable(onehot_csv_path: str,
     # Create variable-level DataFrame
     df_variable = pd.DataFrame(var_data)
     
-    # Sort columns alphabetically for consistency
-    df_variable = df_variable[sorted(df_variable.columns)]
+    # CRITICAL: Use metadata variable order instead of alphabetical sorting
+    # This ensures FCI data matches the order in One-Hot data and metadata
+    variable_order = metadata.get('variable_names', sorted(df_variable.columns))
+    
+    # Reorder columns to match metadata
+    df_variable = df_variable[variable_order]
     
     print(f"\nConverted data shape: {df_variable.shape}")
-    print(f"Variables: {list(df_variable.columns)}")
+    print(f"Variables (in metadata order): {list(df_variable.columns)}")
     
     # Save
     print(f"\nSaving to: {output_path}")

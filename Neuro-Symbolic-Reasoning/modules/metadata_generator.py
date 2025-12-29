@@ -196,7 +196,8 @@ class DiscreteDataMetadataGenerator(BaseMetadataGenerator):
         
         # Parse variable-state structure
         state_mappings = {}
-        variable_names = set()
+        variable_names_ordered = []  # Use list to preserve order
+        variable_names_seen = set()  # Track seen variables
         
         for col in state_columns:
             # Split on last underscore to separate variable from state
@@ -205,7 +206,11 @@ class DiscreteDataMetadataGenerator(BaseMetadataGenerator):
                 raise ValueError(f"Column name {col} doesn't follow VARIABLE_STATE convention")
             
             var_name, state_name = parts
-            variable_names.add(var_name)
+            
+            # Add to ordered list only on first occurrence (preserves CSV column order)
+            if var_name not in variable_names_seen:
+                variable_names_ordered.append(var_name)
+                variable_names_seen.add(var_name)
             
             if var_name not in state_mappings:
                 state_mappings[var_name] = {}
@@ -214,8 +219,8 @@ class DiscreteDataMetadataGenerator(BaseMetadataGenerator):
             state_code = str(len(state_mappings[var_name]))
             state_mappings[var_name][state_code] = col  # Store full column name as state name
         
-        # Sort variable names for consistency
-        variable_names = sorted(list(variable_names))
+        # FIXED: Use CSV column order, NOT alphabetical sorting
+        variable_names = variable_names_ordered
         
         # Count total states
         n_states = sum(len(states) for states in state_mappings.values())
@@ -366,3 +371,4 @@ if __name__ == "__main__":
     print("\n" + "=" * 70)
     print("METADATA GENERATION COMPLETE")
     print("=" * 70)
+

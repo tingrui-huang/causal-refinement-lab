@@ -76,11 +76,19 @@ class CausalDataLoader:
         state_to_var = {}
         idx_counter = 0
         
-        # Build state indices from metadata
-        for var_name, state_mapping in self.metadata['state_mappings'].items():
+        # CRITICAL: Use metadata's variable_names if available to preserve order
+        # Otherwise, use the order from state_mappings (which preserves JSON order in Python 3.7+)
+        if 'variable_names' in self.metadata:
+            variable_order = self.metadata['variable_names']
+        else:
+            variable_order = list(self.metadata['state_mappings'].keys())
+        
+        # Build state indices from metadata in the correct variable order
+        for var_name in variable_order:
+            state_mapping = self.metadata['state_mappings'][var_name]
             var_states = []
             
-            # Sort by state code to ensure consistent ordering
+            # Sort by state code to ensure consistent ordering within each variable
             sorted_codes = sorted(state_mapping.keys(), key=lambda x: int(x))
             
             for state_code in sorted_codes:
@@ -103,7 +111,7 @@ class CausalDataLoader:
             'state_to_var': state_to_var,
             'idx_to_state': idx_to_state,
             'state_to_idx': state_to_idx,
-            'variable_names': sorted(var_to_states.keys())
+            'variable_names': variable_order  # FIXED: Use original order, NOT sorted()
         }
     
     def load_data(self) -> torch.Tensor:
