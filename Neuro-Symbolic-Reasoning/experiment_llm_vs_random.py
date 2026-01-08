@@ -328,7 +328,7 @@ def main():
     #   datasets = ['alarm', 'sachs', 'andes']  # 跑三个
     #
     # 可选数据集：'alarm', 'sachs', 'andes', 'child', 'hailfinder', 'insurance', 'win95pts'
-    datasets = ['alarm']  # ← 改这里！
+    datasets = ['andes']  # ← 改这里！
     
     # 选择要运行的实验类型
     # 'both'   - 运行 LLM 和 Random 两个实验（完整对比）
@@ -341,10 +341,11 @@ def main():
     low_confidence = 0.1   # 弱方向的权重（0.0-0.5）
     
     # 训练轮数
-    n_epochs = 1000
+    n_epochs = 2000
     # ← 改这里！(推荐: sachs=300, alarm=1000, andes=1500,hailfinder=1000 )
     # ============================================================================
-    
+
+
     all_results = {}
     
     for dataset_name in datasets:
