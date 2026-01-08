@@ -165,7 +165,7 @@ class CausalDiscoveryModel(nn.Module):
                 block = adjacency[states_a][:, states_b]
                 
                 # Compute block strength (mean or max)
-                block_strength = block.mean().item()
+                block_strength = block.max().item()
                 
                 # If block strength exceeds threshold, add edge
                 if block_strength > threshold:

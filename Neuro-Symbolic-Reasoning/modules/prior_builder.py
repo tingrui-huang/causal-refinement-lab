@@ -281,12 +281,12 @@ class PriorBuilder:
         backward_strong_count = 0
 
         processed_pairs = set()
-        
+
         # For each FCI edge, randomly assign strong/weak directions
         for _, row in df_fci.iterrows():
             var_a = row[source_col]
             var_b = row[target_col]
-            
+
             # Check if variables exist
             if var_a not in self.var_structure['var_to_states']:
                 continue
@@ -297,11 +297,11 @@ class PriorBuilder:
             if pair_key in processed_pairs:
                 continue
             processed_pairs.add(pair_key)
-            
+
             # Get state indices
             states_a = self.var_structure['var_to_states'][var_a]
             states_b = self.var_structure['var_to_states'][var_b]
-            
+
             # Randomly decide which direction is strong (50/50 chance)
             if torch.rand(1).item() > 0.5:
                 # A -> B is strong, B -> A is weak
@@ -313,19 +313,19 @@ class PriorBuilder:
                 forward_weight = low_confidence
                 backward_weight = high_confidence
                 backward_strong_count += 1
-            
+
             # Assign weights for A -> B
             for i in states_a:
                 for j in states_b:
                     direction_prior[i, j] = forward_weight
-            
+
             # Assign weights for B -> A
             for i in states_b:
                 for j in states_a:
                     direction_prior[i, j] = backward_weight
-            
+
             edge_count += 1
-        
+
         print(f"\nRandom direction prior statistics:")
         print(f"  Total edge pairs: {edge_count}")
         print(f"  Forward strong (A->B): {forward_strong_count} ({forward_strong_count/edge_count*100:.1f}%)")
@@ -337,27 +337,27 @@ class PriorBuilder:
         print("\n[CONTROL EXPERIMENT] Random direction with same magnitude as LLM")
         print("   Expected result: Unresolved ratio -> 0%, but Orientation accuracy ~50%")
         print("   (Because directions are random, not guided by domain knowledge)")
-        
+
         return direction_prior
-    
-    def build_normal_penalty_weights(self, normal_weight: float = 0.1, 
+
+    def build_normal_penalty_weights(self, normal_weight: float = 0.1,
                                      abnormal_weight: float = 1.0,
                                      normal_keyword: str = 'Normal') -> torch.Tensor:
         """
         Build penalty weight matrix for Weighted Group Lasso (dataset-agnostic)
-        
+
         This implements domain-specific penalty weighting. For datasets with
         "normal" states (like ALARM), we can give lower penalty to normal->normal
         connections. For other datasets, this returns uniform weights.
-        
+
         Args:
             normal_weight: Weight for Normal -> Normal (low, e.g., 0.1)
             abnormal_weight: Weight for other connections (high, e.g., 1.0)
             normal_keyword: Keyword to identify normal states (default: 'Normal')
-        
+
         Returns:
             Penalty weight matrix (n_states, n_states)
-            
+
         Logic:
             - If dataset has "normal" states: Normal -> Normal gets low weight
             - Otherwise: Uniform weights for all connections
@@ -365,77 +365,77 @@ class PriorBuilder:
         print("\n" + "=" * 70)
         print("BUILDING PENALTY WEIGHTS")
         print("=" * 70)
-        
+
         penalty_weights = torch.ones(self.n_states, self.n_states) * abnormal_weight
-        
+
         # Check if dataset has "normal" states
-        has_normal_states = any(normal_keyword in self.var_structure['idx_to_state'][i] 
+        has_normal_states = any(normal_keyword in self.var_structure['idx_to_state'][i]
                                for i in range(self.n_states))
-        
+
         if not has_normal_states:
             print(f"Dataset does not have '{normal_keyword}' states - using uniform weights")
             print(f"  All connections: weight={abnormal_weight}")
             return penalty_weights
-        
+
         # Dataset has normal states - apply differential weighting
         print(f"Dataset has '{normal_keyword}' states - applying differential weighting")
-        
+
         normal_to_normal_count = 0
-        
+
         for i in range(self.n_states):
             for j in range(self.n_states):
                 state_i_name = self.var_structure['idx_to_state'][i]
                 state_j_name = self.var_structure['idx_to_state'][j]
-                
+
                 is_i_normal = normal_keyword in state_i_name
                 is_j_normal = normal_keyword in state_j_name
-                
+
                 # Only Normal -> Normal gets low weight
                 if is_i_normal and is_j_normal:
                     penalty_weights[i, j] = normal_weight
                     normal_to_normal_count += 1
-        
+
         print(f"\nPenalty weight statistics:")
         print(f"  Normal -> Normal connections: {normal_to_normal_count} (weight={normal_weight})")
         print(f"  Other connections: {self.n_states**2 - normal_to_normal_count} (weight={abnormal_weight})")
         print(f"  Ratio: {normal_to_normal_count / (self.n_states**2) * 100:.2f}% protected")
-        
+
         return penalty_weights
-    
+
     def build_block_structure(self, skeleton_mask: torch.Tensor) -> List[Dict]:
         """
         Build block structure for Group Lasso
-        
+
         CRITICAL: Only create blocks for edges allowed by FCI skeleton!
         This prevents the model from wasting computation on 1332 variable pairs
         when only ~45 are actually allowed by FCI.
-        
+
         Args:
             skeleton_mask: (105, 105) binary mask from FCI
-        
+
         Returns:
             List of block definitions for FCI-allowed variable pairs only
         """
         print("\n" + "=" * 70)
         print("BUILDING BLOCK STRUCTURE (FCI-CONSTRAINED)")
         print("=" * 70)
-        
+
         blocks = []
         var_names = self.var_structure['variable_names']
-        
+
         for var_a in var_names:
             for var_b in var_names:
                 if var_a == var_b:
                     continue  # Skip self-loops
-                
+
                 # Get state indices for this variable pair
                 row_indices = self.var_structure['var_to_states'][var_a]
                 col_indices = self.var_structure['var_to_states'][var_b]
-                
+
                 # Check if this block has ANY allowed connections in skeleton
                 # Extract the sub-matrix for this block
                 block_mask = skeleton_mask[row_indices][:, col_indices]
-                
+
                 # Only create block if at least one connection is allowed
                 if block_mask.sum().item() > 0:
                     blocks.append({
@@ -443,11 +443,11 @@ class PriorBuilder:
                         'row_indices': row_indices,
                         'col_indices': col_indices
                     })
-        
+
         print(f"Total blocks (FCI-allowed): {len(blocks)}")
         print(f"Total possible blocks: {len(var_names) * (len(var_names) - 1)} = {len(var_names) * (len(var_names) - 1)}")
         print(f"Reduction: {(1 - len(blocks) / (len(var_names) * (len(var_names) - 1))) * 100:.1f}%")
-        
+
         # Show sample blocks
         print(f"\nSample FCI-allowed blocks:")
         for i, block in enumerate(blocks[:5]):
@@ -455,21 +455,21 @@ class PriorBuilder:
             n_rows = len(block['row_indices'])
             n_cols = len(block['col_indices'])
             print(f"  {i+1}. {var_a} -> {var_b}: {n_rows} x {n_cols} = {n_rows * n_cols} connections")
-        
+
         return blocks
-    
-    def get_all_priors(self, fci_skeleton_path: str, llm_direction_path: str = None, 
+
+    def get_all_priors(self, fci_skeleton_path: str, llm_direction_path: str = None,
                       use_llm_prior: bool = True, use_random_prior: bool = False,
                       random_seed: Optional[int] = 42,
                       high_confidence: float = 0.7,
                       low_confidence: float = 0.3) -> Dict[str, torch.Tensor]:
         """
         Convenience method to build all priors at once
-        
+
         IMPORTANT: Uses TWO separate CSV files:
         - fci_skeleton_path: Pure FCI results for HARD skeleton mask
         - llm_direction_path: FCI+LLM hybrid results for SOFT direction prior (optional)
-        
+
         Args:
             fci_skeleton_path: Path to pure FCI edges (e.g., edges_FCI_20251207_230824.csv)
             llm_direction_path: Path to FCI+LLM edges (e.g., edges_Hybrid_FCI_LLM_20251207_230956.csv)
@@ -478,19 +478,19 @@ class PriorBuilder:
                           If False, uses uniform initialization (0.5 for all allowed edges)
             use_random_prior: Whether to use RANDOM direction prior (control experiment)
             random_seed: Random seed for reproducibility (default: 42)
-        
+
         Returns:
             Dictionary with all prior structures
         """
         # Build skeleton from PURE FCI (hard constraint)
         skeleton_mask = self.build_skeleton_mask_from_fci(fci_skeleton_path)
-        
+
         # Build direction prior
         if use_random_prior:
             # CONTROL EXPERIMENT: Random direction prior
             print("\n[CONTROL EXPERIMENT] Using RANDOM direction prior")
             direction_prior = self.build_random_direction_prior(
-                fci_skeleton_path, 
+                fci_skeleton_path,
                 high_confidence=high_confidence,  # Use custom values
                 low_confidence=low_confidence,    # Use custom values
                 seed=random_seed

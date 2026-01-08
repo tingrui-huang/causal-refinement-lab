@@ -57,21 +57,21 @@ def run_experiment_for_dataset(dataset_name: str,
     # - FCI+LLM skeleton (edges_FCI_LLM_*.csv): For LLM Prior (e.g., 38 edges, LLM-filtered)
     pure_fci_skeleton_path = config._auto_detect_latest_file('edges_FCI_[0-9]*.csv', config.FCI_OUTPUT_DIR / dataset_name)
     llm_skeleton_path = config._auto_detect_latest_file('edges_FCI_LLM_*.csv', config.FCI_OUTPUT_DIR / dataset_name)
-    
+
     print("\nUsing files:")
     print(f"  Data path:       {dataset_config['data_path']}")
     print(f"  Metadata path:   {dataset_config['metadata_path']}")
     print(f"  Pure FCI skeleton (for Random Prior): {pure_fci_skeleton_path}")
     print(f"  FCI+LLM skeleton (for LLM Prior):     {llm_skeleton_path}")
     print(f"  Ground truth:    {dataset_config['ground_truth_path']}")
-    
+
     if not pure_fci_skeleton_path or not llm_skeleton_path:
         print(f"\n[ERROR] Missing FCI or LLM files for {dataset_name}")
         print("Please run the pipeline first:")
         print(f"  1. Set DATASET = '{dataset_name}' in config.py")
         print(f"  2. Run: python run_pipeline.py")
         return None
-    
+
     # Get dataset-specific hyperparameters
     if dataset_name == 'sachs':
         lambda_group = 0.01
@@ -106,7 +106,7 @@ def run_experiment_for_dataset(dataset_name: str,
         lambda_group = 0.01
         lambda_cycle = 0.001
         edge_threshold = 0.1
-    
+
     # Shared configuration (without skeleton paths - will be set per experiment)
     base_config = {
         'data_path': str(dataset_config['data_path']),
@@ -123,19 +123,19 @@ def run_experiment_for_dataset(dataset_name: str,
         'high_confidence': high_conf,  # Pass to prior builder
         'low_confidence': low_conf,    # Pass to prior builder
     }
-    
+
     # ============================================================================
     # Run experiments based on run_mode
     # ============================================================================
     results_llm = None
     results_random = None
-    
+
     if run_mode in ['both', 'llm']:
         # Experiment 1: LLM Prior (Baseline)
         print("\n" + "=" * 80)
         print(f"EXPERIMENT: {dataset_name.upper()} - LLM PRIOR (Intelligent Guide)")
         print("=" * 80)
-        
+
         config_llm = base_config.copy()
         config_llm.update({
             'fci_skeleton_path': str(llm_skeleton_path),      # Use FCI+LLM skeleton (LLM-filtered edges)
@@ -144,15 +144,15 @@ def run_experiment_for_dataset(dataset_name: str,
             'use_random_prior': False,
             'output_dir': f'results/experiment_llm_vs_random/{dataset_name}/llm_prior'
         })
-        
+
         results_llm = train_complete(config_llm)
-    
+
     if run_mode in ['both', 'random']:
         # Experiment 2: Random Prior (Control)
         print("\n" + "=" * 80)
         print(f"EXPERIMENT: {dataset_name.upper()} - RANDOM PRIOR (Blind Perturbation)")
         print("=" * 80)
-        
+
         config_random = base_config.copy()
         config_random.update({
             'fci_skeleton_path': str(pure_fci_skeleton_path),  # Use pure FCI skeleton (all FCI edges)
@@ -328,7 +328,7 @@ def main():
     #   datasets = ['alarm', 'sachs', 'andes']  # 跑三个
     #
     # 可选数据集：'alarm', 'sachs', 'andes', 'child', 'hailfinder', 'insurance', 'win95pts'
-    datasets = ['alarm']  # ← 改这里！
+    datasets = ['andes']  # ← 改这里！
     
     # 选择要运行的实验类型
     # 'both'   - 运行 LLM 和 Random 两个实验（完整对比）
@@ -341,10 +341,11 @@ def main():
     low_confidence = 0.1   # 弱方向的权重（0.0-0.5）
     
     # 训练轮数
-    n_epochs = 1000
+    n_epochs = 2000
     # ← 改这里！(推荐: sachs=300, alarm=1000, andes=1500,hailfinder=1000 )
     # ============================================================================
-    
+
+
     all_results = {}
     
     for dataset_name in datasets:

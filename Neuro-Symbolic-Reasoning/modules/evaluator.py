@@ -158,8 +158,8 @@ class CausalGraphEvaluator:
                 # Extract block
                 block = adjacency[states_a][:, states_b]
                 
-                # Compute block strength (mean)
-                block_strength = block.mean().item()
+                # Compute block strength (max)
+                block_strength = block.max().item()
                 
                 # If block strength exceeds threshold, add edge
                 if block_strength > threshold:
