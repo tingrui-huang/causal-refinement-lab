@@ -85,26 +85,26 @@ def compute_unresolved_ratio(adjacency: torch.Tensor,
         # If a direction is not in block_structure, manually compute from adjacency
         if forward_block is not None:
             forward_weights = adjacency[forward_block['row_indices']][:, forward_block['col_indices']]
-            forward_strength = forward_weights.mean().item()
+            forward_strength = forward_weights.max().item()
         else:
             # Manually compute: need to get state indices from reverse_block
             if reverse_block is not None:
                 # Swap indices: reverse_block is (var_b, var_a), we want (var_a, var_b)
                 forward_weights = adjacency[reverse_block['col_indices']][:, reverse_block['row_indices']]
-                forward_strength = forward_weights.mean().item()
+                forward_strength = forward_weights.max().item()
             else:
                 # Should not happen if block_structure is correct
                 forward_strength = 0.0
         
         if reverse_block is not None:
             backward_weights = adjacency[reverse_block['row_indices']][:, reverse_block['col_indices']]
-            backward_strength = backward_weights.mean().item()
+            backward_strength = backward_weights.max().item()
         else:
             # Manually compute: need to get state indices from forward_block
             if forward_block is not None:
                 # Swap indices: forward_block is (var_a, var_b), we want (var_b, var_a)
                 backward_weights = adjacency[forward_block['col_indices']][:, forward_block['row_indices']]
-                backward_strength = backward_weights.mean().item()
+                backward_strength = backward_weights.max().item()
             else:
                 # Should not happen if block_structure is correct
                 backward_strength = 0.0
@@ -173,7 +173,7 @@ def compute_sparsity_metrics(adjacency: torch.Tensor,
     active_blocks = 0
     for block in block_structure:
         block_weights = adjacency[block['row_indices']][:, block['col_indices']]
-        if block_weights.mean().item() > threshold:
+        if block_weights.max().item() > threshold:
             active_blocks += 1
     
     block_sparsity = (len(block_structure) - active_blocks) / len(block_structure)

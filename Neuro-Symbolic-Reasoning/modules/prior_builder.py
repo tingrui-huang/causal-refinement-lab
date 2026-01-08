@@ -280,28 +280,49 @@ class PriorBuilder:
         forward_strong_count = 0
         backward_strong_count = 0
 
-        processed_pairs = set()
-        
-        # For each FCI edge, randomly assign strong/weak directions
+        # ------------------------------------------------------------------
+        # CRITICAL: Make random prior deterministic w.r.t. FCI CSV row order.
+        #
+        # FCI can output the same *set* of edges but in different row orders
+        # across runs. If we iterate df_fci rows directly, we will consume RNG
+        # in a different order and assign random directions to different pairs.
+        #
+        # Fix: collect unique undirected variable pairs first, then sort them
+        # in a stable order based on metadata variable order (var_structure).
+        # ------------------------------------------------------------------
+        var_names = self.var_structure.get('variable_names', [])
+        var_index = {v: i for i, v in enumerate(var_names)}
+
+        pair_set: Set[Tuple[str, str]] = set()
         for _, row in df_fci.iterrows():
             var_a = row[source_col]
             var_b = row[target_col]
-            
+
             # Check if variables exist
             if var_a not in self.var_structure['var_to_states']:
                 continue
             if var_b not in self.var_structure['var_to_states']:
                 continue
 
-            pair_key = tuple(sorted([var_a, var_b]))
-            if pair_key in processed_pairs:
-                continue
-            processed_pairs.add(pair_key)
-            
+            # Canonical undirected pair
+            a, b = (var_a, var_b) if var_a <= var_b else (var_b, var_a)
+            pair_set.add((a, b))
+
+        # Stable order: metadata variable order (fallback to lexical if missing)
+        def pair_sort_key(pair: Tuple[str, str]) -> Tuple[int, int, str, str]:
+            a, b = pair
+            ia = var_index.get(a, 10**9)
+            ib = var_index.get(b, 10**9)
+            return (min(ia, ib), max(ia, ib), a, b)
+
+        sorted_pairs = sorted(pair_set, key=pair_sort_key)
+
+        # For each unique pair, randomly assign strong/weak directions
+        for var_a, var_b in sorted_pairs:
             # Get state indices
             states_a = self.var_structure['var_to_states'][var_a]
             states_b = self.var_structure['var_to_states'][var_b]
-            
+
             # Randomly decide which direction is strong (50/50 chance)
             if torch.rand(1).item() > 0.5:
                 # A -> B is strong, B -> A is weak
@@ -313,17 +334,17 @@ class PriorBuilder:
                 forward_weight = low_confidence
                 backward_weight = high_confidence
                 backward_strong_count += 1
-            
+
             # Assign weights for A -> B
             for i in states_a:
                 for j in states_b:
                     direction_prior[i, j] = forward_weight
-            
+
             # Assign weights for B -> A
             for i in states_b:
                 for j in states_a:
                     direction_prior[i, j] = backward_weight
-            
+
             edge_count += 1
         
         print(f"\nRandom direction prior statistics:")
@@ -482,15 +503,52 @@ class PriorBuilder:
         Returns:
             Dictionary with all prior structures
         """
+        # ------------------------------------------------------------------
+        # SAFETY: Ensure we use a PURE FCI skeleton file for skeleton_mask and
+        # random prior generation.
+        #
+        # Some callers accidentally pass an "edges_FCI_LLM_*.csv" path as the
+        # FCI skeleton (because glob patterns like edges_FCI_*.csv match both).
+        # That makes random prior *appear* to depend on LLM, since deleting/
+        # regenerating LLM changes the "latest" file chosen.
+        #
+        # Fix (localized here, WITHOUT touching LLM prior logic):
+        # - If fci_skeleton_path points to a *_LLM_* file, replace it with the
+        #   most recent edges_FCI_*.csv in the same directory, excluding *_LLM_*.
+        # ------------------------------------------------------------------
+        resolved_fci_skeleton_path = fci_skeleton_path
+        try:
+            p = Path(fci_skeleton_path)
+            if "_LLM_" in p.name.upper():
+                candidates = [c for c in p.parent.glob("edges_FCI_*.csv") if "_LLM_" not in c.name.upper()]
+                if candidates:
+                    best = max(candidates, key=lambda x: x.stat().st_mtime)
+                    resolved_fci_skeleton_path = str(best)
+                    print("\n" + "=" * 70)
+                    print("[WARN] fci_skeleton_path points to an LLM file.")
+                    print("       Using PURE FCI skeleton instead for skeleton/random prior:")
+                    print(f"       Provided: {fci_skeleton_path}")
+                    print(f"       Using:    {resolved_fci_skeleton_path}")
+                    print("=" * 70)
+                else:
+                    print("\n" + "=" * 70)
+                    print("[WARN] fci_skeleton_path points to an LLM file, but no PURE FCI skeleton was found")
+                    print("       in the same directory. Proceeding with the provided path (may be wrong):")
+                    print(f"       {fci_skeleton_path}")
+                    print("=" * 70)
+        except Exception:
+            # If anything goes wrong, fall back to provided path.
+            resolved_fci_skeleton_path = fci_skeleton_path
+
         # Build skeleton from PURE FCI (hard constraint)
-        skeleton_mask = self.build_skeleton_mask_from_fci(fci_skeleton_path)
+        skeleton_mask = self.build_skeleton_mask_from_fci(resolved_fci_skeleton_path)
         
         # Build direction prior
         if use_random_prior:
             # CONTROL EXPERIMENT: Random direction prior
             print("\n[CONTROL EXPERIMENT] Using RANDOM direction prior")
             direction_prior = self.build_random_direction_prior(
-                fci_skeleton_path, 
+                resolved_fci_skeleton_path, 
                 high_confidence=high_confidence,  # Use custom values
                 low_confidence=low_confidence,    # Use custom values
                 seed=random_seed
