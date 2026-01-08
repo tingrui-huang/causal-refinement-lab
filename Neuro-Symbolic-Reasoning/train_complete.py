@@ -17,6 +17,8 @@ from pathlib import Path
 import json
 import numpy as np
 import time
+import os
+import sys
 
 from modules.data_loader import CausalDataLoader
 from modules.prior_builder import PriorBuilder
@@ -33,6 +35,32 @@ def train_complete(config: dict):
     Args:
         config: Training configuration
     """
+    # ---------------------------------------------------------------------
+    # Reproducibility: seed Python/NumPy/PyTorch as early as possible.
+    # ---------------------------------------------------------------------
+    try:
+        project_root = Path(__file__).parent.parent
+        if str(project_root) not in sys.path:
+            sys.path.insert(0, str(project_root))
+        from reproducibility import set_global_seed
+        
+        seed = config.get("random_seed")
+        if seed is None:
+            # Fall back to unified config if the caller didn't pass a seed
+            try:
+                import config as unified_config
+                seed = unified_config.RANDOM_SEED
+            except Exception:
+                raise ValueError("Missing config['random_seed'] and could not import unified config.RANDOM_SEED")
+
+        set_global_seed(
+            int(seed),
+            deterministic_torch=bool(config.get("deterministic_torch", False)),
+        )
+    except Exception as e:
+        # Best-effort: training can still run without the helper
+        print(f"[WARN] Could not set global seed: {e}")
+
     # Start timing
     start_time = time.time()
     
@@ -65,7 +93,7 @@ def train_complete(config: dict):
         llm_direction_path=config.get('llm_direction_path'),  # FCI+LLM for soft direction (optional)
         use_llm_prior=config.get('use_llm_prior', True),  # Whether to use LLM prior
         use_random_prior=config.get('use_random_prior', False),  # Whether to use random prior (control experiment)
-        random_seed=config.get('random_seed', 42),  # Random seed for reproducibility
+        random_seed=config.get('random_seed'),  # Random seed for reproducibility (recommended)
         high_confidence=config.get('high_confidence', 0.7),  # High confidence weight (customizable)
         low_confidence=config.get('low_confidence', 0.3)  # Low confidence weight (customizable)
     )

@@ -30,6 +30,14 @@ class GraphVisualizer:
         """
         from matplotlib.lines import Line2D
         
+        # Use unified seed for deterministic layouts (when available)
+        layout_seed = None
+        try:
+            from config import RANDOM_SEED
+            layout_seed = int(RANDOM_SEED)
+        except Exception:
+            layout_seed = None
+        
         # Categorize edges by type
         edges_directed = []
         edges_llm_resolved = []
@@ -56,7 +64,7 @@ class GraphVisualizer:
                 edges_bidirected.append((u, v))
         
         # Layout - use spring layout for better spacing
-        pos = nx.spring_layout(graph, seed=42, k=1.5, iterations=50)
+        pos = nx.spring_layout(graph, seed=layout_seed, k=1.5, iterations=50)
         
         # Create figure
         plt.figure(figsize=(12, 10))
@@ -184,6 +192,14 @@ class GraphVisualizer:
         """
         from matplotlib.lines import Line2D
         
+        # Use unified seed for deterministic layouts (when available)
+        layout_seed = None
+        try:
+            from config import RANDOM_SEED
+            layout_seed = int(RANDOM_SEED)
+        except Exception:
+            layout_seed = None
+        
         # Create figure with two subplots
         fig, axes = plt.subplots(1, 2, figsize=(20, 10))
         
@@ -194,7 +210,7 @@ class GraphVisualizer:
         # Create a complete graph for better spacing
         temp_graph = nx.Graph()
         temp_graph.add_nodes_from(all_nodes)
-        pos = nx.spring_layout(temp_graph, seed=42, k=1.5, iterations=50)
+        pos = nx.spring_layout(temp_graph, seed=layout_seed, k=1.5, iterations=50)
         
         # --- LEFT: Pure FCI ---
         ax = axes[0]

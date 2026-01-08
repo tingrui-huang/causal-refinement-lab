@@ -218,7 +218,7 @@ class CausalGraphEvaluator:
         orientation_accuracy = correctly_oriented / (correctly_oriented + incorrectly_oriented) if (correctly_oriented + incorrectly_oriented) > 0 else 0
         
         # === 4. STRUCTURAL HAMMING DISTANCE (SHD) ===
-        # According to standard definition (Gemini's clarification):
+        # According to standard definition :
         # 
         # Skeleton SHD: Only considers edge existence (undirected)
         #   SHD_skeleton = E_add + E_del

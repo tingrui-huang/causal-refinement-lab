@@ -11,6 +11,7 @@ This combines statistical rigor with domain knowledge!
 import sys
 import os
 from datetime import datetime
+from pathlib import Path
 
 # Load environment variables from .env file
 try:
@@ -129,7 +130,8 @@ class FCILLMPipeline:
             prompt = self.prompt_generator.generate(node_a, node_b)
 
             print(f"[LLM] Consulting GPT-3.5...")
-            response = self.llm_client.call(prompt)
+            from config import LLM_TEMPERATURE, LLM_MAX_TOKENS
+            response = self.llm_client.call(prompt, temperature=LLM_TEMPERATURE, max_tokens=LLM_MAX_TOKENS)
             print(f"[LLM] Response: {response[:100]}...")
 
             edge = self.parser.parse(response, node_a, node_b)
@@ -230,7 +232,18 @@ class FCILLMPipeline:
 
 def main():
     """Main function - runs FCI + LLM with parameters from config.py"""
-    from config import FCI_ALPHA, VALIDATION_ALPHA
+    from config import FCI_ALPHA, VALIDATION_ALPHA, RANDOM_SEED
+
+    # Best-effort reproducibility
+    try:
+        project_root = Path(__file__).parent.parent
+        if str(project_root) not in sys.path:
+            sys.path.insert(0, str(project_root))
+        from reproducibility import set_global_seed
+
+        set_global_seed(int(RANDOM_SEED))
+    except Exception as e:
+        print(f"[WARN] Could not set global seed: {e}")
     
     print_dataset_info()
     

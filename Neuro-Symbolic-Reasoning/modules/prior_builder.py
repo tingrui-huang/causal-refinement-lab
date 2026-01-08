@@ -258,8 +258,12 @@ class PriorBuilder:
         print(f"Random seed: {seed}")
         print("\n[FAIR COMPARISON] Same magnitude as LLM, only direction is random")
         
+        # IMPORTANT: Use a local RNG so we don't accidentally perturb the
+        # global torch RNG state used later in training.
+        rng = None
         if seed is not None:
-            torch.manual_seed(seed)
+            rng = torch.Generator()
+            rng.manual_seed(int(seed))
         
         # Initialize with zeros
         direction_prior = torch.zeros(self.n_states, self.n_states)
@@ -303,7 +307,8 @@ class PriorBuilder:
             states_b = self.var_structure['var_to_states'][var_b]
 
             # Randomly decide which direction is strong (50/50 chance)
-            if torch.rand(1).item() > 0.5:
+            coin = torch.rand(1, generator=rng).item() if rng is not None else torch.rand(1).item()
+            if coin > 0.5:
                 # A -> B is strong, B -> A is weak
                 forward_weight = high_confidence
                 backward_weight = low_confidence
@@ -460,7 +465,7 @@ class PriorBuilder:
 
     def get_all_priors(self, fci_skeleton_path: str, llm_direction_path: str = None,
                       use_llm_prior: bool = True, use_random_prior: bool = False,
-                      random_seed: Optional[int] = 42,
+                      random_seed: Optional[int] = None,
                       high_confidence: float = 0.7,
                       low_confidence: float = 0.3) -> Dict[str, torch.Tensor]:
         """
@@ -477,8 +482,7 @@ class PriorBuilder:
             use_llm_prior: Whether to use LLM direction prior (default: True)
                           If False, uses uniform initialization (0.5 for all allowed edges)
             use_random_prior: Whether to use RANDOM direction prior (control experiment)
-            random_seed: Random seed for reproducibility (default: 42)
-
+            random_seed: Random seed for reproducibility (required if use_random_prior=True)
         Returns:
             Dictionary with all prior structures
         """
@@ -487,13 +491,15 @@ class PriorBuilder:
 
         # Build direction prior
         if use_random_prior:
+            if random_seed is None:
+                raise ValueError("random_seed must be provided when use_random_prior=True (recommend: config.RANDOM_SEED)")
             # CONTROL EXPERIMENT: Random direction prior
             print("\n[CONTROL EXPERIMENT] Using RANDOM direction prior")
             direction_prior = self.build_random_direction_prior(
                 fci_skeleton_path,
                 high_confidence=high_confidence,  # Use custom values
                 low_confidence=low_confidence,    # Use custom values
-                seed=random_seed
+                seed=int(random_seed)
             )
         elif use_llm_prior and llm_direction_path:
             # Build direction prior from FCI+LLM hybrid (soft initialization)

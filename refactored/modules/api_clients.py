@@ -38,7 +38,7 @@ class GPT35Client(BaseAPIClient):
         self.client = openai.OpenAI(api_key=api_key)
         print(f"[API] Initialized: {self.model_name}")
     
-    def call(self, prompt, temperature=0.7, max_tokens=1000):
+    def call(self, prompt, temperature=0.0, max_tokens=1000):
         try:
             response = self.client.chat.completions.create(
                 model=self.model_name,
@@ -47,7 +47,8 @@ class GPT35Client(BaseAPIClient):
                     {"role": "user", "content": prompt}
                 ],
                 temperature=temperature,
-                max_tokens=max_tokens
+                max_tokens=max_tokens,
+                top_p=1.0,
             )
             
             response_text = response.choices[0].message.content
@@ -92,14 +93,28 @@ class GeminiClient(BaseAPIClient):
         except Exception as e:
             print(f"[API] Could not list models: {e}")
     
-    def call(self, prompt, temperature=0.7, max_tokens=1000):
+    def call(self, prompt, temperature=0.0, max_tokens=1000):
         import time
         
         try:
-            response = self.client.models.generate_content(
-                model=self.model_name,
-                contents=prompt
-            )
+            # Best-effort deterministic generation (provider may still be nondeterministic).
+            try:
+                from google.genai import types
+                generation_config = types.GenerationConfig(
+                    temperature=temperature,
+                    max_output_tokens=max_tokens,
+                )
+                response = self.client.models.generate_content(
+                    model=self.model_name,
+                    contents=prompt,
+                    generation_config=generation_config,
+                )
+            except Exception:
+                # Fallback for older SDK versions
+                response = self.client.models.generate_content(
+                    model=self.model_name,
+                    contents=prompt,
+                )
             
             response_text = response.text if response.text else ""
             
@@ -139,7 +154,7 @@ class HuggingFaceInferenceClient(BaseAPIClient):
         print(f"[API] Initialized: {self.model_name}")
         print("[API] Using Hugging Face Inference API (no GPU needed)")
     
-    def call(self, prompt, temperature=0.7, max_tokens=1000):
+    def call(self, prompt, temperature=0.0, max_tokens=1000):
         try:
             # Use chat_completion instead of text_generation
             # This works with all HF Inference providers (together, featherless-ai, etc.)
@@ -212,7 +227,7 @@ class GPT2Client(BaseAPIClient):
             import sys
             sys.exit(1)
     
-    def call(self, prompt, temperature=0.7, max_tokens=150):
+    def call(self, prompt, temperature=0.0, max_tokens=150):
         print(f"[LLM] Querying local {self.model_name}...")
         
         try:
@@ -224,7 +239,9 @@ class GPT2Client(BaseAPIClient):
                 max_new_tokens=max_tokens,
                 num_return_sequences=1,
                 pad_token_id=50256,
-                truncation=True
+                truncation=True,
+                do_sample=bool(temperature and temperature > 0),
+                temperature=max(float(temperature), 1e-5) if temperature else 1.0,
             )
             
             # Extract generated text

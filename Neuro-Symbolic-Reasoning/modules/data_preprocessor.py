@@ -192,7 +192,17 @@ if __name__ == "__main__":
     print("-" * 80)
     
     # Generate synthetic continuous data
-    np.random.seed(42)
+    # Use unified config seed if available (avoid hard-coding)
+    try:
+        import sys as _sys
+        from pathlib import Path as _Path
+        project_root = _Path(__file__).parent.parent.parent
+        _sys.path.insert(0, str(project_root))
+        import config as _unified_config
+        np.random.seed(int(_unified_config.RANDOM_SEED))
+    except Exception:
+        # If config isn't available, just proceed without setting a seed.
+        pass
     continuous_data = pd.DataFrame({
         'altitude': np.random.uniform(0, 3000, 100),
         'temperature': np.random.uniform(-10, 40, 100)
@@ -222,3 +232,4 @@ if __name__ == "__main__":
     print("=" * 80)
     print("\n[INFO] This module is ready for Tuebingen integration")
     print("[INFO] When needed, simply set data_type='continuous' in config")
+

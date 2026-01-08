@@ -68,6 +68,27 @@ def run_command(command, cwd=None, description="", env=None):
     return True
 
 
+def get_reproducibility_env() -> dict:
+    """
+    Best-effort reproducibility for subprocesses.
+
+    Note: PYTHONHASHSEED must be set before interpreter start to fully take effect,
+    so passing it via env to subprocesses is useful.
+    """
+    try:
+        project_root = Path(__file__).parent.parent
+        sys.path.insert(0, str(project_root))
+        import config as unified_config
+
+        seed = getattr(unified_config, "RANDOM_SEED", None)
+        if seed is None:
+            return {}
+
+        return {"PYTHONHASHSEED": str(seed)}
+    except Exception:
+        return {}
+
+
 def run_fci():
     """Step 1: Run FCI algorithm"""
     refactored_dir = Path('../refactored')
@@ -79,7 +100,8 @@ def run_fci():
     success = run_command(
         f"{sys.executable} main_fci.py",
         cwd=refactored_dir,
-        description="STEP 1: RUNNING FCI ALGORITHM"
+        description="STEP 1: RUNNING FCI ALGORITHM",
+        env=get_reproducibility_env(),
     )
     
     if success:
@@ -146,7 +168,8 @@ def run_llm():
     success = run_command(
         f"{sys.executable} {script_name}",
         cwd=refactored_dir,
-        description=f"STEP 2: RUNNING FCI + {llm_name.upper()}"
+        description=f"STEP 2: RUNNING FCI + {llm_name.upper()}",
+        env=get_reproducibility_env(),
     )
     
     if success:

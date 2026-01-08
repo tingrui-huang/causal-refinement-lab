@@ -29,10 +29,11 @@ from train_complete import train_complete
 
 
 def run_experiment_for_dataset(dataset_name: str, 
-                               high_conf: float = 0.6, 
+                               high_conf: float = 0.6,
                                low_conf: float = 0.4,
                                n_epochs: int = 200,
-                               run_mode: str = 'both'):
+                               run_mode: str = 'both',
+                               random_seed: int = None):
     """
     Run LLM vs Random experiment for a specific dataset
     
@@ -47,6 +48,10 @@ def run_experiment_for_dataset(dataset_name: str,
     print("=" * 80)
     print(f"Prior weights: High={high_conf}, Low={low_conf}")
     print("=" * 80)
+    
+    # Default: follow unified config (single source of truth)
+    if random_seed is None:
+        random_seed = config.RANDOM_SEED
     
     # Get dataset configuration
     dataset_config = config.DATASET_CONFIGS[dataset_name]
@@ -122,6 +127,7 @@ def run_experiment_for_dataset(dataset_name: str,
         'edge_threshold': edge_threshold,
         'high_confidence': high_conf,  # Pass to prior builder
         'low_confidence': low_conf,    # Pass to prior builder
+        'random_seed': int(random_seed),    # For reproducibility (training + random prior)
     }
 
     # ============================================================================
@@ -159,7 +165,6 @@ def run_experiment_for_dataset(dataset_name: str,
             'llm_direction_path': None,                        # Not used for random prior
             'use_llm_prior': False,
             'use_random_prior': True,
-            'random_seed': 42,  # For reproducibility
             'output_dir': f'results/experiment_llm_vs_random/{dataset_name}/random_prior'
         })
         
