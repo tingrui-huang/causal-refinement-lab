@@ -52,23 +52,26 @@ def run_experiment_for_dataset(dataset_name: str,
     dataset_config = config.DATASET_CONFIGS[dataset_name]
     
     # Auto-detect latest FCI and LLM files
-    fci_skeleton_path = config._auto_detect_latest_file('edges_FCI_*.csv', config.FCI_OUTPUT_DIR / dataset_name)
-    llm_direction_path = config._auto_detect_latest_file('edges_FCI_LLM_*.csv', config.FCI_OUTPUT_DIR / dataset_name)
-    
+    # IMPORTANT: Use different skeleton files for different experiments!
+    # - Pure FCI skeleton (edges_FCI_[0-9]*.csv): For Random Prior (e.g., 40 edges)
+    # - FCI+LLM skeleton (edges_FCI_LLM_*.csv): For LLM Prior (e.g., 38 edges, LLM-filtered)
+    pure_fci_skeleton_path = config._auto_detect_latest_file('edges_FCI_[0-9]*.csv', config.FCI_OUTPUT_DIR / dataset_name)
+    llm_skeleton_path = config._auto_detect_latest_file('edges_FCI_LLM_*.csv', config.FCI_OUTPUT_DIR / dataset_name)
+
     print("\nUsing files:")
     print(f"  Data path:       {dataset_config['data_path']}")
     print(f"  Metadata path:   {dataset_config['metadata_path']}")
-    print(f"  FCI skeleton:    {fci_skeleton_path}")
-    print(f"  LLM direction:   {llm_direction_path}")
+    print(f"  Pure FCI skeleton (for Random Prior): {pure_fci_skeleton_path}")
+    print(f"  FCI+LLM skeleton (for LLM Prior):     {llm_skeleton_path}")
     print(f"  Ground truth:    {dataset_config['ground_truth_path']}")
-    
-    if not fci_skeleton_path or not llm_direction_path:
+
+    if not pure_fci_skeleton_path or not llm_skeleton_path:
         print(f"\n[ERROR] Missing FCI or LLM files for {dataset_name}")
         print("Please run the pipeline first:")
         print(f"  1. Set DATASET = '{dataset_name}' in config.py")
         print(f"  2. Run: python run_pipeline.py")
         return None
-    
+
     # Get dataset-specific hyperparameters
     if dataset_name == 'sachs':
         lambda_group = 0.01
@@ -103,13 +106,11 @@ def run_experiment_for_dataset(dataset_name: str,
         lambda_group = 0.01
         lambda_cycle = 0.001
         edge_threshold = 0.1
-    
-    # Shared configuration
+
+    # Shared configuration (without skeleton paths - will be set per experiment)
     base_config = {
         'data_path': str(dataset_config['data_path']),
         'metadata_path': str(dataset_config['metadata_path']),
-        'fci_skeleton_path': str(fci_skeleton_path),
-        'llm_direction_path': str(llm_direction_path),
         'ground_truth_path': str(dataset_config['ground_truth_path']),
         'ground_truth_type': dataset_config.get('ground_truth_type', 'bif'),
         'n_epochs': n_epochs,
@@ -122,36 +123,40 @@ def run_experiment_for_dataset(dataset_name: str,
         'high_confidence': high_conf,  # Pass to prior builder
         'low_confidence': low_conf,    # Pass to prior builder
     }
-    
+
     # ============================================================================
     # Run experiments based on run_mode
     # ============================================================================
     results_llm = None
     results_random = None
-    
+
     if run_mode in ['both', 'llm']:
         # Experiment 1: LLM Prior (Baseline)
         print("\n" + "=" * 80)
         print(f"EXPERIMENT: {dataset_name.upper()} - LLM PRIOR (Intelligent Guide)")
         print("=" * 80)
-        
+
         config_llm = base_config.copy()
         config_llm.update({
+            'fci_skeleton_path': str(llm_skeleton_path),      # Use FCI+LLM skeleton (LLM-filtered edges)
+            'llm_direction_path': str(llm_skeleton_path),     # Same file for direction
             'use_llm_prior': True,
             'use_random_prior': False,
             'output_dir': f'results/experiment_llm_vs_random/{dataset_name}/llm_prior'
         })
-        
+
         results_llm = train_complete(config_llm)
-    
+
     if run_mode in ['both', 'random']:
         # Experiment 2: Random Prior (Control)
         print("\n" + "=" * 80)
         print(f"EXPERIMENT: {dataset_name.upper()} - RANDOM PRIOR (Blind Perturbation)")
         print("=" * 80)
-        
+
         config_random = base_config.copy()
         config_random.update({
+            'fci_skeleton_path': str(pure_fci_skeleton_path),  # Use pure FCI skeleton (all FCI edges)
+            'llm_direction_path': None,                        # Not used for random prior
             'use_llm_prior': False,
             'use_random_prior': True,
             'random_seed': 42,  # For reproducibility
