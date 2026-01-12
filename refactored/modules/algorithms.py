@@ -308,3 +308,122 @@ class FCIAlgorithm(BaseAlgorithm):
         
         return graph
 
+
+class PCAlgorithm(BaseAlgorithm):
+    """
+    PC Algorithm (Constraint-based, assumes causal sufficiency / no latent confounders).
+    
+    Output is typically a CPDAG: directed + undirected edges.
+    We convert it into a NetworkX DiGraph with edge attributes:
+      - type='directed' for oriented edges
+      - type='undirected' for unoriented edges (stored in both directions)
+    """
+    def __init__(self, dataframe, nodes):
+        super().__init__(dataframe, nodes)
+        print("[ALGORITHM] PC (Peter-Clark)")
+        print("[ALGORITHM] Assumes: No latent confounders (causal sufficiency)")
+        print("[ALGORITHM] Output: CPDAG (directed + undirected edges)")
+
+    def run(self, independence_test='chisq', alpha=0.05, stable=True, uc_rule=0, uc_priority=2):
+        """
+        Run PC algorithm from causal-learn.
+        
+        Parameters
+        ----------
+        independence_test : str
+            'chisq' / 'gsq' for discrete; 'fisherz' for continuous Gaussian.
+        alpha : float
+            Significance level.
+        stable : bool
+            Use stable-PC variant.
+        uc_rule : int
+            Unshielded collider orientation rule in causal-learn PC implementation.
+        uc_priority : int
+            Priority for collider orientation in causal-learn.
+        """
+        try:
+            from causallearn.search.ConstraintBased.PC import pc
+
+            print(f"[PC] Running with test: {independence_test}, alpha: {alpha}, stable: {stable}")
+            print(f"[PC] Data shape: {self.data_matrix.shape}")
+
+            # causal-learn PC signature differs across versions; be defensive.
+            try:
+                cg = pc(
+                    self.data_matrix,
+                    alpha=alpha,
+                    indep_test=independence_test,
+                    stable=stable,
+                    uc_rule=uc_rule,
+                    uc_priority=uc_priority,
+                )
+            except TypeError:
+                # Fallback for older versions
+                cg = pc(
+                    self.data_matrix,
+                    alpha=alpha,
+                    indep_test=independence_test,
+                    stable=stable,
+                )
+
+            learned_graph = getattr(cg, "G", cg)
+            print("[PC] Algorithm completed")
+
+            self.graph = self._convert_to_networkx(learned_graph)
+            return self.graph
+
+        except ImportError:
+            print("[ERROR] causal-learn not installed!")
+            print("[ERROR] Install with: pip install causal-learn")
+            raise
+        except Exception as e:
+            print(f"[ERROR] PC failed: {e}")
+            raise
+
+    def _convert_to_networkx(self, causallearn_graph):
+        graph = nx.DiGraph()
+        graph.add_nodes_from(self.nodes)
+
+        adj_matrix = causallearn_graph.graph
+
+        pair_count = 0
+        directed_count = 0
+        undirected_count = 0
+
+        # causal-learn encoding (for CPDAG):
+        # -1: arrowhead (>), 1: tail (-), 0: no edge
+        for i in range(len(self.nodes)):
+            for j in range(i + 1, len(self.nodes)):
+                a = adj_matrix[i, j]
+                b = adj_matrix[j, i]
+
+                if a == 0 and b == 0:
+                    continue
+
+                pair_count += 1
+
+                if a == -1 and b == 1:
+                    # i -> j
+                    graph.add_edge(self.nodes[i], self.nodes[j], type='directed')
+                    directed_count += 1
+                elif a == 1 and b == -1:
+                    # j -> i
+                    graph.add_edge(self.nodes[j], self.nodes[i], type='directed')
+                    directed_count += 1
+                elif a == -1 and b == -1:
+                    # undirected edge i - j in CPDAG (store both directions)
+                    graph.add_edge(self.nodes[i], self.nodes[j], type='undirected')
+                    graph.add_edge(self.nodes[j], self.nodes[i], type='undirected')
+                    undirected_count += 1
+                else:
+                    # Unexpected encoding across versions; treat as undirected to be safe.
+                    graph.add_edge(self.nodes[i], self.nodes[j], type='undirected', pc_encoding=f"({a},{b})")
+                    graph.add_edge(self.nodes[j], self.nodes[i], type='undirected', pc_encoding=f"({b},{a})")
+                    undirected_count += 1
+
+        print(f"[PC] Converted to NetworkX: {pair_count} edge pairs")
+        print(f"[PC]   Directed (->):   {directed_count}")
+        print(f"[PC]   Undirected (-):  {undirected_count}")
+        print(f"[PC]   Total edges in DiGraph: {graph.number_of_edges()}")
+
+        return graph
