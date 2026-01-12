@@ -375,7 +375,7 @@ def evaluate_fci(fci_csv_path, ground_truth_path, output_dir=None):
     print(f"Precision:            {edge_precision*100:.1f}%")
     print(f"Recall:               {edge_recall*100:.1f}%")
     print(f"Orient. Accuracy:     {orientation_accuracy*100:.1f}%")
-    print(f"Unresolved Ratio:     {unresolved_stats['unresolved_ratio']*100:.1f}%  ← FCI Only (Baseline)")
+    print(f"Unresolved Ratio:     {unresolved_stats['unresolved_ratio']*100:.1f}%  <- FCI Only (Baseline)")
     print(f"Undirected Ratio:     {undirected_ratio*100:.1f}%")
     print("=" * 80)
     
@@ -413,7 +413,7 @@ def evaluate_fci(fci_csv_path, ground_truth_path, output_dir=None):
             f.write(f"Incorrectly Oriented: {incorrectly_oriented}\n")
             f.write("=" * 80 + "\n")
         
-        print(f"\n✓ Evaluation report saved to: {report_path}")
+        print(f"\n[OK] Evaluation report saved to: {report_path}")
     
     return {
         'skeleton_shd': shd_stats['skeleton_shd'],
