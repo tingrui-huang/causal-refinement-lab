@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from pathlib import Path
 from typing import List
 
@@ -39,8 +40,8 @@ if str(NSR_DIR) not in sys.path:
 # DEFAULTS (edit these like config.py style; CLI is optional)
 # --------------------------------------------------------------------------------------
 DEFAULT_DATASET = "andes"
-DEFAULT_SEEDS = [9]
-DEFAULT_EPOCHS = 3000
+DEFAULT_SEEDS = [0,1,2,3,4]
+DEFAULT_EPOCHS = 1500
 DEFAULT_LR = 0.01
 
 # If None, dataset-specific defaults are used (see below)
@@ -93,6 +94,10 @@ def main():
             lambda_cycle = 0.001 if lambda_cycle is None else lambda_cycle
             edge_threshold = 0.1 if edge_threshold is None else edge_threshold
 
+    # Track total runtime across seeds (this script only; excludes any downstream analysis)
+    total_start = time.time()
+    per_seed_rows = []
+
     for seed in args.seeds:
         out_dir = NSR_DIR / "results" / "stability_runs" / args.dataset / f"seed_{seed}"
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -122,7 +127,37 @@ def main():
         print("\n" + "=" * 80)
         print(f"STABILITY RUN: dataset={args.dataset}, seed={seed}")
         print("=" * 80)
+        seed_start = time.time()
         train_complete(cfg)
+        seed_sec = time.time() - seed_start
+        per_seed_rows.append((int(seed), float(seed_sec)))
+
+        # Write per-seed runtime (seconds) so we can audit/compare later
+        (out_dir / "runtime_seconds.txt").write_text(
+            f"dataset={args.dataset}\nseed={seed}\nwhat=train_complete(cfg)\nruntime_seconds={seed_sec:.4f}\n",
+            encoding="utf-8",
+        )
+
+    total_sec = time.time() - total_start
+    # Write dataset-level summary for this multi-seed invocation
+    ds_dir = NSR_DIR / "results" / "stability_runs" / args.dataset
+    summary_lines = [
+        "MULTI-SEED STABILITY RUN SUMMARY",
+        f"dataset={args.dataset}",
+        f"what=run_multi_seed_random_prior.py (sum of train_complete over seeds)",
+        f"seeds={list(map(int, args.seeds))}",
+        f"epochs={int(args.epochs)}",
+        f"lr={float(args.lr)}",
+        f"lambda_group={float(lambda_group)}",
+        f"lambda_cycle={float(lambda_cycle)}",
+        f"edge_threshold={float(edge_threshold)}",
+        f"total_runtime_seconds={total_sec:.4f}",
+        "",
+        "per_seed_runtime_seconds:",
+    ]
+    for s, sec in per_seed_rows:
+        summary_lines.append(f"  seed_{s}: {sec:.4f}")
+    (ds_dir / "multi_seed_runtime_summary.txt").write_text("\n".join(summary_lines) + "\n", encoding="utf-8")
 
 
 if __name__ == "__main__":
