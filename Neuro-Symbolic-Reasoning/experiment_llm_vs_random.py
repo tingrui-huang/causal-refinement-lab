@@ -19,8 +19,13 @@ UPDATED: Now uses weaker initialization (0.6/0.4 instead of 0.7/0.3)
          Tests on multiple datasets: Alarm, Sachs
 """
 
+from __future__ import annotations
+
+import argparse
 import sys
+import time
 from pathlib import Path
+from typing import Dict, List, Optional, Union
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # Import config to get dataset paths
@@ -33,7 +38,7 @@ def run_experiment_for_dataset(dataset_name: str,
                                low_conf: float = 0.4,
                                n_epochs: int = 200,
                                run_mode: str = 'both',
-                               random_seed: int = None):
+                               random_seed: Optional[int] = None):
     """
     Run LLM vs Random experiment for a specific dataset
     
@@ -42,6 +47,8 @@ def run_experiment_for_dataset(dataset_name: str,
         high_conf: High confidence weight (default: 0.6, weaker than 0.7)
         low_conf: Low confidence weight (default: 0.4, weaker than 0.3)
         n_epochs: Number of training epochs
+        run_mode: 'both' | 'llm' | 'random'
+        random_seed: Random seed for reproducibility (training + random prior)
     """
     print("\n" + "=" * 80)
     print(f"EXPERIMENT: {dataset_name.upper()} DATASET")
@@ -52,6 +59,7 @@ def run_experiment_for_dataset(dataset_name: str,
     # Default: follow unified config (single source of truth)
     if random_seed is None:
         random_seed = config.RANDOM_SEED
+    random_seed = int(random_seed)
     
     # Get dataset configuration
     dataset_config = config.DATASET_CONFIGS[dataset_name]
@@ -127,7 +135,7 @@ def run_experiment_for_dataset(dataset_name: str,
         'edge_threshold': edge_threshold,
         'high_confidence': high_conf,  # Pass to prior builder
         'low_confidence': low_conf,    # Pass to prior builder
-        'random_seed': int(random_seed),    # For reproducibility (training + random prior)
+        'random_seed': random_seed,    # For reproducibility (training + random prior)
     }
 
     # ============================================================================
@@ -148,7 +156,7 @@ def run_experiment_for_dataset(dataset_name: str,
             'llm_direction_path': str(llm_skeleton_path),     # Same file for direction
             'use_llm_prior': True,
             'use_random_prior': False,
-            'output_dir': f'results/experiment_llm_vs_random/{dataset_name}/llm_prior'
+            'output_dir': f'results/experiment_llm_vs_random/{dataset_name}/seed_{random_seed}/llm_prior'
         })
 
         results_llm = train_complete(config_llm)
@@ -165,7 +173,7 @@ def run_experiment_for_dataset(dataset_name: str,
             'llm_direction_path': None,                        # Not used for random prior
             'use_llm_prior': False,
             'use_random_prior': True,
-            'output_dir': f'results/experiment_llm_vs_random/{dataset_name}/random_prior'
+            'output_dir': f'results/experiment_llm_vs_random/{dataset_name}/seed_{random_seed}/random_prior'
         })
         
         results_random = train_complete(config_random)
@@ -249,7 +257,7 @@ def run_experiment_for_dataset(dataset_name: str,
     # Save comparison report (only if both experiments were run)
     # ============================================================================
     if results_llm and results_random:
-        output_dir = Path(f'results/experiment_llm_vs_random/{dataset_name}')
+        output_dir = Path(f'results/experiment_llm_vs_random/{dataset_name}/seed_{random_seed}')
         output_dir.mkdir(exist_ok=True, parents=True)
         
         with open(output_dir / 'comparison_report.txt', 'w', encoding='utf-8') as f:
@@ -297,6 +305,7 @@ def run_experiment_for_dataset(dataset_name: str,
     
     return {
         'dataset': dataset_name,
+        'seed': random_seed,
         'llm': results_llm,
         'random': results_random,
         'orientation_diff': orientation_diff,
@@ -317,9 +326,25 @@ def main():
     print("  - If LLM is 'Blind Perturbation': ~50% orientation accuracy (random)")
     print("\nNEW: Using weaker initialization (0.6/0.4 instead of 0.7/0.3)")
     print("=" * 80)
+
+    # Optional CLI (mirrors run_multi_seed_random_prior.py style)
+    ap = argparse.ArgumentParser(add_help=True)
+    ap.add_argument("--datasets", nargs="+", type=str, default=None,
+                    help="Datasets to run (e.g. --datasets alarm sachs). If omitted, uses the defaults below.")
+    ap.add_argument("--seeds", nargs="+", type=int, default=None,
+                    help="Random seeds to run (e.g. --seeds 0 1 2). If omitted, uses the defaults below.")
+    ap.add_argument("--run_mode", type=str, default=None, choices=["both", "llm", "random"],
+                    help="Which experiments to run: both | llm | random. If omitted, uses the defaults below.")
+    ap.add_argument("--epochs", type=int, default=None,
+                    help="Training epochs. If omitted, uses the defaults below.")
+    ap.add_argument("--high_conf", type=float, default=None,
+                    help="High confidence prior weight. If omitted, uses the defaults below.")
+    ap.add_argument("--low_conf", type=float, default=None,
+                    help="Low confidence prior weight. If omitted, uses the defaults below.")
+    args = ap.parse_args()
     
     # ============================================================================
-    # 🔧 CONFIGURATION - 改这里！
+    #  CONFIGURATION - 改这里！
     # ============================================================================
     # 选择要测试的数据集（可以是单个或多个）
     # 
@@ -333,65 +358,104 @@ def main():
     #   datasets = ['alarm', 'sachs', 'andes']  # 跑三个
     #
     # 可选数据集：'alarm', 'sachs', 'andes', 'child', 'hailfinder', 'insurance', 'win95pts'
-    datasets = ['andes']  # ← 改这里！
+    datasets = ['win95pts']  # ← 改这里！(or use CLI: --datasets ...)
     
     # 选择要运行的实验类型
     # 'both'   - 运行 LLM 和 Random 两个实验（完整对比）
     # 'llm'    - 只运行 LLM Prior 实验
     # 'random' - 只运行 Random Prior 实验
-    run_mode = 'both'  # ← 改这里！选择 'both', 'llm', 或 'random'
+    run_mode = 'both'  # ← 改这里！(or use CLI: --run_mode ...)
+
+    # Random seeds: can be a single int or a list of ints
+    # Example:
+    #   seeds = 42
+    #   seeds = [0, 1, 2, 3, 4]
+    seeds: Union[int, List[int]] = [5]  # ← 改这里！(or use CLI: --seeds ...)
     
     # Prior 权重配置
     high_confidence = 0.9  # 强方向的权重（0.5-1.0）
     low_confidence = 0.1   # 弱方向的权重（0.0-0.5）
     
     # 训练轮数
-    n_epochs = 3000
+    n_epochs = 1500
     # ← 改这里！(推荐: sachs=300, alarm=1000, andes=1500,hailfinder=1000 )
     # ============================================================================
 
+    # Apply CLI overrides (if provided)
+    if args.datasets is not None:
+        datasets = args.datasets
+    if args.run_mode is not None:
+        run_mode = args.run_mode
+    if args.seeds is not None:
+        seeds = args.seeds
+    if args.epochs is not None:
+        n_epochs = int(args.epochs)
+    if args.high_conf is not None:
+        high_confidence = float(args.high_conf)
+    if args.low_conf is not None:
+        low_confidence = float(args.low_conf)
 
-    all_results = {}
+    # Normalize seeds to list[int]
+    if isinstance(seeds, int):
+        seeds_list = [int(seeds)]
+    else:
+        seeds_list = [int(s) for s in seeds]
+
+    total_start = time.time()
+    all_results: Dict[str, Dict[int, Dict]] = {}
     
     for dataset_name in datasets:
-        try:
-            result = run_experiment_for_dataset(
-                dataset_name=dataset_name,
-                high_conf=high_confidence,
-                low_conf=low_confidence,
-                n_epochs=n_epochs,
-                run_mode=run_mode
-            )
-            if result:
-                all_results[dataset_name] = result
-        except Exception as e:
-            print(f"\n[ERROR] Failed to run experiment for {dataset_name}: {e}")
-            import traceback
-            traceback.print_exc()
-            continue
+        all_results[dataset_name] = {}
+        for seed in seeds_list:
+            try:
+                result = run_experiment_for_dataset(
+                    dataset_name=dataset_name,
+                    high_conf=high_confidence,
+                    low_conf=low_confidence,
+                    n_epochs=n_epochs,
+                    run_mode=run_mode,
+                    random_seed=seed,
+                )
+                if result:
+                    all_results[dataset_name][int(seed)] = result
+            except Exception as e:
+                print(f"\n[ERROR] Failed to run experiment for {dataset_name} (seed={seed}): {e}")
+                import traceback
+                traceback.print_exc()
+                continue
     
     # ============================================================================
     # Overall Summary
     # ============================================================================
-    if all_results:
+    if any(all_results.get(ds) for ds in all_results):
         print("\n" + "=" * 80)
         print("OVERALL SUMMARY - ALL DATASETS")
         print("=" * 80)
         
-        for dataset_name, result in all_results.items():
+        for dataset_name, seed_map in all_results.items():
+            if not seed_map:
+                continue
             print(f"\n{dataset_name.upper()}:")
-            print(f"  Orientation Diff: {result['orientation_diff']*100:+5.1f}%")
-            print(f"  LLM Orient Acc:   {result['llm']['metrics']['orientation_accuracy']*100:5.1f}%")
-            print(f"  Random Orient Acc:{result['random']['metrics']['orientation_accuracy']*100:5.1f}%")
-            
-            if result['orientation_diff'] > 0.2:
-                print(f"  → LLM is INTELLIGENT GUIDE ✓")
-            elif result['orientation_diff'] < 0.1:
-                print(f"  → LLM is BLIND PERTURBATION ✗")
-            else:
-                print(f"  → MIXED RESULTS ?")
+            for seed, result in seed_map.items():
+                # Only print diffs when both runs exist
+                if result.get("llm") and result.get("random"):
+                    print(f"  seed_{seed}:")
+                    print(f"    Orientation Diff: {result['orientation_diff']*100:+5.1f}%")
+                    print(f"    LLM Orient Acc:   {result['llm']['metrics']['orientation_accuracy']*100:5.1f}%")
+                    print(f"    Random Orient Acc:{result['random']['metrics']['orientation_accuracy']*100:5.1f}%")
+                    if result['orientation_diff'] > 0.2:
+                        print("    → LLM is INTELLIGENT GUIDE ✓")
+                    elif result['orientation_diff'] < 0.1:
+                        print("    → LLM is BLIND PERTURBATION ✗")
+                    else:
+                        print("    → MIXED RESULTS ?")
+                elif result.get("llm"):
+                    print(f"  seed_{seed}: LLM-only run completed")
+                elif result.get("random"):
+                    print(f"  seed_{seed}: Random-only run completed")
         
         print("\n" + "=" * 80)
+        print(f"Total runtime (this script): {time.time() - total_start:.1f}s")
 
 
 if __name__ == "__main__":
