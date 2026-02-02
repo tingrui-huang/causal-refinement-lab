@@ -439,7 +439,12 @@ def evaluate_fci(fci_csv_path, ground_truth_path, output_dir=None):
 
 
 def find_latest_fci_csv(output_dir='output'):
-    """Find the most recent FCI CSV file"""
+    """
+    Find the most recent constraint-based skeleton CSV file.
+
+    Backward-compatible name: historically this returned edges_FCI_*.csv.
+    Now it also accepts edges_RFCI_*.csv and prefers RFCI when both exist.
+    """
     from config import DATASET
     
     output_path = Path(output_dir)
@@ -450,16 +455,22 @@ def find_latest_fci_csv(output_dir='output'):
     # Try dataset-specific directory first
     dataset_dir = output_path / DATASET
     if dataset_dir.exists():
+        rfci_csvs = list(dataset_dir.glob('edges_RFCI_*.csv'))
+        if rfci_csvs:
+            return max(rfci_csvs, key=lambda p: p.stat().st_mtime)
         fci_csvs = list(dataset_dir.glob('edges_FCI_*.csv'))
         if fci_csvs:
             return max(fci_csvs, key=lambda p: p.stat().st_mtime)
     
     # Fall back to root output directory
+    rfci_csvs = list(output_path.glob('edges_RFCI_*.csv'))
+    if rfci_csvs:
+        return max(rfci_csvs, key=lambda p: p.stat().st_mtime)
+
     fci_csvs = list(output_path.glob('edges_FCI_*.csv'))
-    
     if not fci_csvs:
         return None
-    
+
     return max(fci_csvs, key=lambda p: p.stat().st_mtime)
 
 

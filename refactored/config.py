@@ -24,11 +24,22 @@ DATASET_CONFIGS = unified_config.DATASET_CONFIGS
 get_current_dataset_config = unified_config.get_current_dataset_config
 FCI_INDEPENDENCE_TEST = unified_config.FCI_INDEPENDENCE_TEST
 FCI_ALPHA = unified_config.FCI_ALPHA
+RFCI_ALPHA = getattr(unified_config, "RFCI_ALPHA", FCI_ALPHA)
+RFCI_DEPTH = getattr(unified_config, "RFCI_DEPTH", -1)
+RFCI_MAX_DISC_PATH_LEN = getattr(unified_config, "RFCI_MAX_DISC_PATH_LEN", -1)
+RFCI_MAX_ROWS = getattr(unified_config, "RFCI_MAX_ROWS", None)
 VALIDATION_ALPHA = unified_config.VALIDATION_ALPHA
 LLM_MODEL = unified_config.LLM_MODEL
 FCI_OUTPUT_DIR = unified_config.FCI_OUTPUT_DIR
 get_fci_config = unified_config.get_fci_config
 print_unified_config = unified_config.print_config
+VERBOSE = getattr(unified_config, "VERBOSE", False)
+
+# Per-dataset overrides (if provided in DATASET_CONFIGS[DATASET])
+_ds_cfg = get_current_dataset_config()
+RFCI_DEPTH = int(_ds_cfg.get("rfci_depth", RFCI_DEPTH)) if RFCI_DEPTH is not None else -1
+RFCI_MAX_DISC_PATH_LEN = int(_ds_cfg.get("rfci_max_disc_path_len", RFCI_MAX_DISC_PATH_LEN)) if RFCI_MAX_DISC_PATH_LEN is not None else -1
+RFCI_MAX_ROWS = _ds_cfg.get("rfci_max_rows", RFCI_MAX_ROWS)
 
 # Legacy imports (kept for backward compatibility)
 from_config = (

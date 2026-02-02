@@ -7,6 +7,10 @@ These are baseline methods that don't use LLMs.
 
 import numpy as np
 import networkx as nx
+import os
+import csv
+import subprocess
+from pathlib import Path
 
 
 class BaseAlgorithm:
@@ -306,6 +310,153 @@ class FCIAlgorithm(BaseAlgorithm):
         print(f"[FCI]   Undirected (o-o):   {undirected_count}  [completely ambiguous]")
         print(f"[FCI]   Tail-tail (--):     {tail_tail_count}")
         
+        return graph
+
+
+class RFCIAlgorithm(BaseAlgorithm):
+    """
+    RFCI (Tetrad) wrapper.
+
+    Why: your installed causal-learn does not ship RFCI, and pigs/link graphs are too large for FCI.
+    This wrapper runs Java Tetrad RFCI via a tiny bundled runner (refactored/third_party/tetrad/RunRfci.java)
+    and returns a NetworkX graph with edge_type attributes compatible with existing reporters/prior_builder.
+    """
+    def __init__(self, dataframe, nodes, data_path: str | None = None):
+        super().__init__(dataframe, nodes)
+        self.data_path = data_path
+        print("[ALGORITHM] RFCI (Recursive FCI) via Tetrad (Java)")
+        print("[ALGORITHM] Allows: Latent confounders (like FCI), typically faster on large graphs")
+
+    def run(
+        self,
+        alpha: float = 0.05,
+        depth: int = -1,
+        max_disc_path_len: int = -1,
+        max_rows: int | None = None,
+        verbose: bool = False,
+        output_edges_path: str | None = None,
+    ):
+        """
+        Run RFCI on a discrete, integer-coded CSV (header required).
+
+        Parameters
+        ----------
+        alpha : float
+            Significance level for CI tests.
+        depth : int
+            Search depth (-1 = unlimited). Smaller speeds up.
+        max_disc_path_len : int
+            Max discriminating path length (-1 = unlimited). Smaller speeds up.
+        output_edges_path : str | None
+            Where to write edges CSV. If None, a temp file under refactored/third_party/tetrad/ is used.
+        """
+        # Resolve paths
+        repo_root = Path(__file__).resolve().parents[1]  # refactored/
+        tetrad_dir = repo_root / "third_party" / "tetrad"
+        jar_path = tetrad_dir / "tetrad-lib-7.6.8-shaded.jar"
+        java_src = tetrad_dir / "RunRfci.java"
+        bin_dir = tetrad_dir / "bin"
+        class_name = "RunRfci"
+
+        if not jar_path.exists():
+            raise FileNotFoundError(f"Missing Tetrad jar: {jar_path}")
+        if not java_src.exists():
+            raise FileNotFoundError(f"Missing Java runner source: {java_src}")
+
+        if not self.data_path:
+            raise ValueError(
+                "RFCIAlgorithm needs the CSV path used to load the dataframe. "
+                "Pass data_path=... when constructing RFCIAlgorithm."
+            )
+
+        in_csv = Path(self.data_path)
+        if not in_csv.exists():
+            raise FileNotFoundError(f"Input CSV not found: {in_csv}")
+
+        out_csv = Path(output_edges_path) if output_edges_path else (tetrad_dir / "rfci_edges_tmp.csv")
+
+        # Compile runner if needed
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        class_file = bin_dir / f"{class_name}.class"
+        if not class_file.exists() or class_file.stat().st_mtime < java_src.stat().st_mtime:
+            print("[RFCI] Compiling Java runner...")
+            compile_cmd = [
+                "javac",
+                "-cp",
+                str(jar_path),
+                "-d",
+                str(bin_dir),
+                str(java_src),
+            ]
+            proc = subprocess.run(compile_cmd, capture_output=True, text=True)
+            if proc.returncode != 0:
+                raise RuntimeError(
+                    "javac failed.\n"
+                    f"cmd={' '.join(compile_cmd)}\n"
+                    f"stdout:\n{proc.stdout}\n"
+                    f"stderr:\n{proc.stderr}\n"
+                )
+
+        # Run RFCI
+        print("[RFCI] Running Tetrad RFCI...")
+        cp_sep = ";" if os.name == "nt" else ":"
+        classpath = f"{bin_dir}{cp_sep}{jar_path}"
+        run_cmd = [
+            "java",
+            "-cp",
+            classpath,
+            class_name,
+            str(in_csv),
+            str(out_csv),
+            str(alpha),
+            str(depth),
+            str(max_disc_path_len),
+            str(max_rows) if max_rows is not None else "-1",
+            "true" if verbose else "false",
+        ]
+        proc = subprocess.run(run_cmd, capture_output=True, text=True)
+        if proc.returncode != 0:
+            raise RuntimeError(
+                "java RFCI runner failed.\n"
+                f"cmd={' '.join(run_cmd)}\n"
+                f"stdout:\n{proc.stdout}\n"
+                f"stderr:\n{proc.stderr}\n"
+            )
+
+        if not out_csv.exists():
+            raise RuntimeError(f"RFCI did not produce output edges file: {out_csv}")
+
+        # Convert edges CSV to NetworkX
+        graph = nx.DiGraph()
+        graph.add_nodes_from(self.nodes)
+
+        with out_csv.open("r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                u = row.get("source")
+                v = row.get("target")
+                edge_type = row.get("edge_type", "directed")
+                status = row.get("status", "accepted")
+                if status == "rejected":
+                    graph.add_edge(u, v, type="rejected")
+                else:
+                    graph.add_edge(u, v, type=edge_type)
+
+        # Basic stats
+        directed = sum(1 for _, _, d in graph.edges(data=True) if d.get("type") == "directed")
+        bidirected = sum(1 for _, _, d in graph.edges(data=True) if d.get("type") == "bidirected")
+        partial = sum(1 for _, _, d in graph.edges(data=True) if d.get("type") == "partial")
+        undirected = sum(1 for _, _, d in graph.edges(data=True) if d.get("type") == "undirected")
+        tail_tail = sum(1 for _, _, d in graph.edges(data=True) if d.get("type") == "tail-tail")
+
+        print(f"[RFCI] Output edges: {graph.number_of_edges()}")
+        print(f"[RFCI]   Directed (->):      {directed}")
+        print(f"[RFCI]   Bidirected (<->):   {bidirected}  [latent confounders]")
+        print(f"[RFCI]   Partial (o->/-o):   {partial}  [ambiguous direction]")
+        print(f"[RFCI]   Undirected (o-o):   {undirected}  [completely ambiguous]")
+        print(f"[RFCI]   Tail-tail (--):     {tail_tail}")
+
+        self.graph = graph
         return graph
 
 
