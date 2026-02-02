@@ -75,7 +75,7 @@ class CausalTrainer:
         if self.dataset_stats.global_baseline_ratio > 0.6:
             # Enable suppression, but use a safer default than 0.1 to avoid over-suppressing signal.
             # Can be overridden via config['gamma_base_suppressed'].
-            self.gamma_base = float(self.config.get("gamma_base_suppressed", 0.3))
+            self.gamma_base = float(self.config.get("gamma_base_suppressed", 0.5))
         else:
             self.gamma_base = 1.0  # balanced dataset, no suppression
 
