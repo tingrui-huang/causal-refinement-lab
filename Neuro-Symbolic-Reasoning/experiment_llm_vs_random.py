@@ -64,26 +64,48 @@ def run_experiment_for_dataset(dataset_name: str,
     # Get dataset configuration
     dataset_config = config.DATASET_CONFIGS[dataset_name]
     
-    # Auto-detect latest FCI and LLM files
-    # IMPORTANT: Use different skeleton files for different experiments!
-    # - Pure FCI skeleton (edges_FCI_[0-9]*.csv): For Random Prior (e.g., 40 edges)
-    # - FCI+LLM skeleton (edges_FCI_LLM_*.csv): For LLM Prior (e.g., 38 edges, LLM-filtered)
-    pure_fci_skeleton_path = config._auto_detect_latest_file('edges_FCI_[0-9]*.csv', config.FCI_OUTPUT_DIR / dataset_name)
-    llm_skeleton_path = config._auto_detect_latest_file('edges_FCI_LLM_*.csv', config.FCI_OUTPUT_DIR / dataset_name)
+    # Auto-detect latest skeleton and (optional) LLM direction files.
+    #
+    # IMPORTANT:
+    # - pigs/link may use RFCI instead of FCI (edges_RFCI_*.csv).
+    # - Some datasets/runs may NOT have LLM outputs at all. In that case we should still
+    #   be able to run Random Prior only.
+    pure_skeleton_path = config._auto_detect_latest_file_any(
+        ["edges_RFCI_*.csv", "edges_FCI_*.csv"],
+        config.FCI_OUTPUT_DIR / dataset_name,
+    )
+    llm_skeleton_path = config._auto_detect_latest_file_any(
+        ["edges_RFCI_LLM_*.csv", "edges_FCI_LLM_*.csv"],
+        config.FCI_OUTPUT_DIR / dataset_name,
+    )
+
+    requested_mode = run_mode
+    effective_mode = run_mode
+
+    # If LLM files are missing, automatically fall back to random prior.
+    if effective_mode in ["both", "llm"] and not llm_skeleton_path:
+        if effective_mode == "llm":
+            print(f"\n[WARN] No LLM skeleton found for {dataset_name}. Falling back to RANDOM prior only.")
+        else:
+            print(f"\n[WARN] No LLM skeleton found for {dataset_name}. Running RANDOM prior only.")
+        effective_mode = "random"
+
+    # For random/both we must have at least a constraint skeleton (RFCI/FCI).
+    if effective_mode in ["both", "random"] and not pure_skeleton_path:
+        print(f"\n[ERROR] Missing constraint skeleton for {dataset_name}.")
+        print(f"Expected one of: edges_RFCI_*.csv or edges_FCI_*.csv under {config.FCI_OUTPUT_DIR / dataset_name}")
+        print("Please run the pipeline first:")
+        print(f"  1. Set DATASET = '{dataset_name}' in config.py")
+        print(f"  2. Run: python run_pipeline.py  (or run refactored/main_rfci.py or refactored/main_fci.py)")
+        return None
 
     print("\nUsing files:")
     print(f"  Data path:       {dataset_config['data_path']}")
     print(f"  Metadata path:   {dataset_config['metadata_path']}")
-    print(f"  Pure FCI skeleton (for Random Prior): {pure_fci_skeleton_path}")
-    print(f"  FCI+LLM skeleton (for LLM Prior):     {llm_skeleton_path}")
+    print(f"  Skeleton (for Random Prior): {pure_skeleton_path}")
+    print(f"  LLM skeleton (for LLM Prior): {llm_skeleton_path}")
     print(f"  Ground truth:    {dataset_config['ground_truth_path']}")
-
-    if not pure_fci_skeleton_path or not llm_skeleton_path:
-        print(f"\n[ERROR] Missing FCI or LLM files for {dataset_name}")
-        print("Please run the pipeline first:")
-        print(f"  1. Set DATASET = '{dataset_name}' in config.py")
-        print(f"  2. Run: python run_pipeline.py")
-        return None
+    print(f"  Requested mode:  {requested_mode} -> Effective mode: {effective_mode}")
 
     # Get dataset-specific hyperparameters
     if dataset_name == 'sachs':
@@ -144,7 +166,7 @@ def run_experiment_for_dataset(dataset_name: str,
     results_llm = None
     results_random = None
 
-    if run_mode in ['both', 'llm']:
+    if effective_mode in ['both', 'llm']:
         # Experiment 1: LLM Prior (Baseline)
         print("\n" + "=" * 80)
         print(f"EXPERIMENT: {dataset_name.upper()} - LLM PRIOR (Intelligent Guide)")
@@ -161,7 +183,7 @@ def run_experiment_for_dataset(dataset_name: str,
 
         results_llm = train_complete(config_llm)
 
-    if run_mode in ['both', 'random']:
+    if effective_mode in ['both', 'random']:
         # Experiment 2: Random Prior (Control)
         print("\n" + "=" * 80)
         print(f"EXPERIMENT: {dataset_name.upper()} - RANDOM PRIOR (Blind Perturbation)")
@@ -169,7 +191,7 @@ def run_experiment_for_dataset(dataset_name: str,
 
         config_random = base_config.copy()
         config_random.update({
-            'fci_skeleton_path': str(pure_fci_skeleton_path),  # Use pure FCI skeleton (all FCI edges)
+            'fci_skeleton_path': str(pure_skeleton_path),      # Use constraint skeleton (RFCI/FCI)
             'llm_direction_path': None,                        # Not used for random prior
             'use_llm_prior': False,
             'use_random_prior': True,
@@ -303,13 +325,70 @@ def run_experiment_for_dataset(dataset_name: str,
         print(f"\nComparison report saved to: {output_dir / 'comparison_report.txt'}")
         print("\n" + "=" * 80)
     
+    # ============================================================================
+    # Save run report (ALWAYS, even for random-only)
+    # ============================================================================
+    seed_dir = Path(f"results/experiment_llm_vs_random/{dataset_name}/seed_{random_seed}")
+    seed_dir.mkdir(exist_ok=True, parents=True)
+    report_path = seed_dir / "run_report.txt"
+
+    def _safe_get_final_unresolved(res):
+        try:
+            return res["history"]["unresolved_ratio"][-1]
+        except Exception:
+            return None
+
+    with open(report_path, "w", encoding="utf-8") as f:
+        f.write(f"dataset={dataset_name}\n")
+        f.write(f"seed={random_seed}\n")
+        f.write(f"requested_mode={requested_mode}\n")
+        f.write(f"effective_mode={effective_mode}\n")
+        f.write(f"skeleton_path={pure_skeleton_path}\n")
+        f.write(f"llm_skeleton_path={llm_skeleton_path}\n")
+        f.write(f"data_path={dataset_config['data_path']}\n")
+        f.write(f"metadata_path={dataset_config['metadata_path']}\n")
+        f.write(f"ground_truth_path={dataset_config['ground_truth_path']}\n")
+        f.write(f"high_confidence={high_conf}\n")
+        f.write(f"low_confidence={low_conf}\n")
+        f.write(f"n_epochs={n_epochs}\n")
+        f.write("\n")
+
+        if results_llm:
+            f.write("[LLM PRIOR]\n")
+            f.write(f"orientation_accuracy={results_llm['metrics'].get('orientation_accuracy')}\n")
+            f.write(f"edge_f1={results_llm['metrics'].get('edge_f1')}\n")
+            f.write(f"directed_f1={results_llm['metrics'].get('directed_f1')}\n")
+            f.write(f"unresolved_ratio_final={_safe_get_final_unresolved(results_llm)}\n")
+            f.write("\n")
+        if results_random:
+            f.write("[RANDOM PRIOR]\n")
+            f.write(f"orientation_accuracy={results_random['metrics'].get('orientation_accuracy')}\n")
+            f.write(f"edge_f1={results_random['metrics'].get('edge_f1')}\n")
+            f.write(f"directed_f1={results_random['metrics'].get('directed_f1')}\n")
+            f.write(f"unresolved_ratio_final={_safe_get_final_unresolved(results_random)}\n")
+            f.write("\n")
+
+        if results_llm and results_random:
+            f.write("[COMPARISON]\n")
+            unresolved_diff = abs((_safe_get_final_unresolved(results_llm) or 0) - (_safe_get_final_unresolved(results_random) or 0))
+            orientation_diff = (results_llm["metrics"].get("orientation_accuracy") or 0) - (results_random["metrics"].get("orientation_accuracy") or 0)
+            f.write(f"unresolved_diff={unresolved_diff}\n")
+            f.write(f"orientation_diff={orientation_diff}\n")
+
+    print(f"\n[OK] Saved run report: {report_path}")
+
     return {
         'dataset': dataset_name,
         'seed': random_seed,
         'llm': results_llm,
         'random': results_random,
+        'requested_mode': requested_mode,
+        'effective_mode': effective_mode,
+        'skeleton_path': str(pure_skeleton_path) if pure_skeleton_path else None,
+        'llm_skeleton_path': str(llm_skeleton_path) if llm_skeleton_path else None,
+        'report_path': str(report_path),
         'orientation_diff': orientation_diff,
-        'unresolved_diff': unresolved_diff
+        'unresolved_diff': unresolved_diff,
     }
 
 
@@ -358,13 +437,13 @@ def main():
     #   datasets = ['alarm', 'sachs', 'andes']  # 跑三个
     #
     # 可选数据集：'alarm', 'sachs', 'andes', 'child', 'hailfinder', 'insurance', 'win95pts'
-    datasets = ['win95pts']  # ← 改这里！(or use CLI: --datasets ...)
+    datasets = ['link']  # ← 改这里！(or use CLI: --datasets ...)
     
     # 选择要运行的实验类型
     # 'both'   - 运行 LLM 和 Random 两个实验（完整对比）
     # 'llm'    - 只运行 LLM Prior 实验
     # 'random' - 只运行 Random Prior 实验
-    run_mode = 'both'  # ← 改这里！(or use CLI: --run_mode ...)
+    run_mode = 'random'  # ← 改这里！(or use CLI: --run_mode ...)
 
     # Random seeds: can be a single int or a list of ints
     # Example:
@@ -377,7 +456,7 @@ def main():
     low_confidence = 0.1   # 弱方向的权重（0.0-0.5）
     
     # 训练轮数
-    n_epochs = 1500
+    n_epochs = 200
     # ← 改这里！(推荐: sachs=300, alarm=1000, andes=1500,hailfinder=1000 )
     # ============================================================================
 

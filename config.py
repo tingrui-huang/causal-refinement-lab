@@ -24,7 +24,7 @@ NEURO_SYMBOLIC_DIR = PROJECT_ROOT / 'Neuro-Symbolic-Reasoning'
 # DATASET SELECTION
 # ============================================================================
 # Options: 'alarm', 'insurance', 'sachs', 'child', 'hailfinder', 'win95pts', 'tuebingen_pair0001', etc.
-DATASET = 'alarm'
+DATASET = 'link'
 
 # ============================================================================
 # STEP 1: FCI ALGORITHM SETTINGS
@@ -35,6 +35,25 @@ FCI_INDEPENDENCE_TEST = 'chisq'
 
 # Significance level for FCI
 FCI_ALPHA = 0.05
+
+# ============================================================================
+# STEP 1b: RFCI ALGORITHM SETTINGS (for large graphs)
+# ============================================================================
+# NOTE: Your installed causal-learn package does not include RFCI, so RFCI is
+# run via Java Tetrad (see refactored/main_rfci.py and refactored/third_party/tetrad/).
+#
+# We keep RFCI config separate so you can tune it for pigs/link without affecting FCI.
+RFCI_ALPHA = FCI_ALPHA
+
+# Depth for RFCI adjacency search (-1 = unlimited). Smaller values speed up.
+RFCI_DEPTH = 2
+
+# Max discriminating path length (-1 = unlimited). Smaller values speed up.
+RFCI_MAX_DISC_PATH_LEN = 2
+
+# Max rows used for RFCI only (None = use full dataset).
+# Rationale: CI tests cost grows ~linearly with N, while downstream refinement can still use full N.
+RFCI_MAX_ROWS = 20000
 
 # Validation alpha (for LLM-based direction resolution)
 VALIDATION_ALPHA = 0.01
@@ -48,7 +67,7 @@ VALIDATION_ALPHA = 0.01
 #   - 'gpt-3.5-turbo' (GPT-3.5)
 #   - 'gpt-4' (GPT-4)
 #   - 'zephyr-7b' (Zephyr)
-LLM_MODEL = 'gpt-3.5-turbo'  # Set to None for FCI-only pipeline (testing GSB framework)
+LLM_MODEL = 'none'  # Set to None for FCI-only pipeline (testing GSB framework)
 
 # Use LLM prior for direction initialization in neural training?
 USE_LLM_PRIOR = True  # LLM prior enabled - using semantic variable names
@@ -306,6 +325,61 @@ DATASET_CONFIGS = {
         'fci_skeleton_path': None,  # Will be auto-detected
         'llm_direction_path': None,  # Will be auto-detected
     },
+
+    'pigs': {
+        # Data files
+        # IMPORTANT: FCI needs variable-level data (N vars columns), neural training needs one-hot data (sum(states) columns)
+        'fci_data_path': PROJECT_ROOT / 'pigs_data_variable.csv',  # Variable-level data for FCI
+        'data_path': NEURO_SYMBOLIC_DIR / 'data' / 'pigs' / 'pigs_data_50000.csv',  # One-hot data for neural training
+        'metadata_path': NEURO_SYMBOLIC_DIR / 'data' / 'pigs' / 'metadata.json',
+
+        # Ground truth (for evaluation)
+        'ground_truth_path': NEURO_SYMBOLIC_DIR / 'data' / 'pigs' / 'pigs.bif',
+        'ground_truth_type': 'bif',
+
+        # Data type
+        'data_type': 'discrete',
+
+        # Constraint-based discovery default (FCI is too slow for pigs-sized graphs)
+        # Options: 'fci' | 'rfci'
+        'constraint_algo': 'rfci',
+
+        # RFCI tuning (optional per-dataset overrides; falls back to global RFCI_* settings)
+        'rfci_depth': 2,
+        'rfci_max_disc_path_len': 2,
+        'rfci_max_rows': 20000,
+
+        # FCI/LLM outputs (auto-detected, leave as None)
+        'fci_skeleton_path': None,
+        'llm_direction_path': None,
+    },
+
+    'link': {
+        # Data files
+        # IMPORTANT: RFCI/FCI needs variable-level data, neural training needs one-hot data
+        'fci_data_path': PROJECT_ROOT / 'link_data_variable.csv',  # Variable-level data for RFCI/FCI
+        'data_path': NEURO_SYMBOLIC_DIR / 'data' / 'link' / 'link_data_50000.csv',  # One-hot for neural training
+        'metadata_path': NEURO_SYMBOLIC_DIR / 'data' / 'link' / 'metadata.json',
+
+        # Ground truth (for evaluation)
+        'ground_truth_path': NEURO_SYMBOLIC_DIR / 'data' / 'link' / 'link.bif',
+        'ground_truth_type': 'bif',
+
+        # Data type
+        'data_type': 'discrete',
+
+        # Constraint-based discovery default (link is large; prefer RFCI)
+        'constraint_algo': 'rfci',
+
+        # RFCI tuning (optional per-dataset overrides; falls back to global RFCI_* settings)
+        'rfci_depth': 2,
+        'rfci_max_disc_path_len': 2,
+        'rfci_max_rows': 20000,
+
+        # FCI/LLM outputs (auto-detected, leave as None)
+        'fci_skeleton_path': None,
+        'llm_direction_path': None,
+    },
     
     # Add more datasets here...
 }
@@ -385,6 +459,19 @@ def get_training_config():
     # Allow environment variable override for batch processing
     fci_skeleton_override = os.environ.get('FCI_SKELETON_PATH')
     llm_direction_override = os.environ.get('LLM_DIRECTION_PATH')
+
+    # Which constraint-based algorithm produced the skeleton?
+    # Default remains FCI, but large graphs (e.g., pigs/link) can use RFCI.
+    constraint_algo = dataset_cfg.get("constraint_algo", "fci").lower()
+    if constraint_algo not in {"fci", "rfci"}:
+        constraint_algo = "fci"
+
+    if constraint_algo == "rfci":
+        skeleton_patterns = ["edges_RFCI_*.csv", "edges_FCI_*.csv"]
+        llm_patterns = ["edges_RFCI_LLM_*.csv", "edges_FCI_LLM_*.csv"]
+    else:
+        skeleton_patterns = ["edges_FCI_*.csv", "edges_RFCI_*.csv"]
+        llm_patterns = ["edges_FCI_LLM_*.csv", "edges_RFCI_LLM_*.csv"]
     
     return {
         # Dataset
@@ -395,9 +482,18 @@ def get_training_config():
         'ground_truth_type': dataset_cfg.get('ground_truth_type', 'bif'),
         'data_type': dataset_cfg.get('data_type', 'discrete'),
         
-        # FCI/LLM paths (can be overridden by environment variables for batch processing)
-        'fci_skeleton_path': fci_skeleton_override if fci_skeleton_override else _auto_detect_latest_file('edges_FCI_*.csv', FCI_OUTPUT_DIR / DATASET),
-        'llm_direction_path': llm_direction_override if llm_direction_override else (_auto_detect_latest_file('edges_FCI_LLM_*.csv', FCI_OUTPUT_DIR / DATASET) if USE_LLM_PRIOR else None),
+        # Constraint skeleton + optional LLM directions.
+        # Can be overridden by environment variables for batch processing.
+        'fci_skeleton_path': (
+            fci_skeleton_override
+            if fci_skeleton_override
+            else _auto_detect_latest_file_any(skeleton_patterns, FCI_OUTPUT_DIR / DATASET)
+        ),
+        'llm_direction_path': (
+            llm_direction_override
+            if llm_direction_override
+            else (_auto_detect_latest_file_any(llm_patterns, FCI_OUTPUT_DIR / DATASET) if USE_LLM_PRIOR else None)
+        ),
         
         # LLM settings
         'llm_model': LLM_MODEL,
@@ -443,6 +539,20 @@ def _auto_detect_latest_file(pattern, directory):
     # Return the most recent file
     latest_file = max(files, key=lambda p: p.stat().st_mtime)
     return str(latest_file)
+
+
+def _auto_detect_latest_file_any(patterns, directory):
+    """
+    Auto-detect the latest file matching ANY of the provided glob patterns.
+
+    Patterns are tried in order; the first pattern with >=1 match wins (and returns its latest file).
+    This is used to allow RFCI/FCI compatibility without changing downstream code.
+    """
+    for pat in patterns:
+        hit = _auto_detect_latest_file(pat, directory)
+        if hit:
+            return hit
+    return None
 
 
 def print_config():

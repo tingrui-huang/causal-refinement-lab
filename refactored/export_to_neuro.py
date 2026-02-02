@@ -37,16 +37,16 @@ def find_latest_file(pattern, directory=OUTPUT_DIR):
 
 
 def export_fci():
-    """Export FCI skeleton (no LLM)"""
+    """Export constraint skeleton (FCI or RFCI)"""
     print("\n" + "=" * 80)
     print("EXPORTING FCI SKELETON")
     print("=" * 80)
     
-    # Find latest FCI CSV
-    latest_fci = find_latest_file('edges_FCI_*.csv')
+    # Find latest constraint CSV (prefer RFCI if present)
+    latest_fci = find_latest_file('edges_RFCI_*.csv') or find_latest_file('edges_FCI_*.csv')
     
     if not latest_fci:
-        print("[WARN] No FCI CSV found. Skipping FCI export.")
+        print("[WARN] No FCI/RFCI CSV found. Skipping skeleton export.")
         return None
     
     print(f"Found: {latest_fci.name}")

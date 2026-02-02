@@ -90,22 +90,36 @@ def get_reproducibility_env() -> dict:
 
 
 def run_fci():
-    """Step 1: Run FCI algorithm"""
+    """Step 1: Run constraint-based discovery (FCI or RFCI)"""
     refactored_dir = Path('../refactored')
     
     if not refactored_dir.exists():
         print(f"[ERROR] refactored/ directory not found at {refactored_dir.absolute()}")
         return False
     
+    # Decide which algorithm to run based on dataset config
+    project_root = Path(__file__).parent.parent
+    sys.path.insert(0, str(project_root))
+    from config import DATASET, get_current_dataset_config
+
+    cfg = get_current_dataset_config()
+    algo = str(cfg.get("constraint_algo", "fci")).lower()
+    if algo == "rfci":
+        script = "main_rfci.py"
+        desc = "STEP 1: RUNNING RFCI (TETRAD) ALGORITHM"
+    else:
+        script = "main_fci.py"
+        desc = "STEP 1: RUNNING FCI ALGORITHM"
+
     success = run_command(
-        f"{sys.executable} main_fci.py",
+        f"{sys.executable} {script}",
         cwd=refactored_dir,
-        description="STEP 1: RUNNING FCI ALGORITHM",
+        description=desc,
         env=get_reproducibility_env(),
     )
     
     if success:
-        print("\n[OK] FCI completed successfully")
+        print(f"\n[OK] {algo.upper()} completed successfully")
     
     return success
 
@@ -120,10 +134,19 @@ def run_llm():
     project_root = Path(__file__).parent.parent
     sys.path.insert(0, str(project_root))
     
-    from config import LLM_MODEL
+    from config import LLM_MODEL, DATASET, get_current_dataset_config
     
     if not LLM_MODEL:
         print("\n[INFO] No LLM configured. Skipping LLM step.")
+        return True
+
+    # RFCI is supported for skeleton generation; the current LLM scripts are FCI-based.
+    # We skip by default to avoid accidentally running slow FCI again.
+    algo = str(get_current_dataset_config().get("constraint_algo", "fci")).lower()
+    if algo == "rfci":
+        print("\n[WARN] constraint_algo=rfci for this dataset.")
+        print("[WARN] Current refactored LLM scripts are FCI-based; skipping LLM step to avoid running FCI.")
+        print("[WARN] If you need RFCI+LLM, we can add a dedicated hybrid script that consumes edges_RFCI_*.csv.")
         return True
     
     refactored_dir = Path('../refactored')
