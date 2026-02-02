@@ -24,6 +24,7 @@ from modules.data_loader import CausalDataLoader
 from modules.prior_builder import PriorBuilder
 from modules.model import CausalDiscoveryModel
 from modules.loss import LossComputer
+from modules.trainer import CausalTrainer
 from modules.evaluator import CausalGraphEvaluator
 from modules.metrics import compute_unresolved_ratio, compute_sparsity_metrics
 
@@ -83,6 +84,51 @@ def train_complete(config: dict):
     )
     observations = data_loader.load_data()
     var_structure = data_loader.get_variable_structure()
+
+    # ---------------------------------------------------------------------
+    # Adaptive Reliability-Aware stats (baseline dominance, per-state frequency)
+    # ---------------------------------------------------------------------
+    trainer = CausalTrainer(
+        var_structure=var_structure,
+        dataset_tensor=observations,
+        config=config,
+    )
+    print("\n" + "=" * 70)
+    print("ADAPTIVE RELIABILITY-AWARE STATS")
+    print("=" * 70)
+    print(f"Global baseline ratio: {trainer.dataset_stats.global_baseline_ratio:.3f}")
+    print(f"gamma_base: {trainer.gamma_base} (rule: >0.6 -> 0.1 else 1.0)")
+    print(f"gamma_noise: {trainer.gamma_noise}")
+    print(f"noise_threshold: {trainer.noise_threshold}")
+
+    # If baseline suppression is active, reduce Group Lasso relative strength
+    lambda_group_effective = config['lambda_group'] * (0.5 if trainer.gamma_base < 1.0 else 1.0)
+    if lambda_group_effective != config['lambda_group']:
+        print(f"[INFO] Effective lambda_group adjusted: {config['lambda_group']} -> {lambda_group_effective}")
+
+    # ---------------------------------------------------------------------
+    # Precompute per-variable indexing for adaptive reconstruction loss
+    # - model outputs: (B, n_total_states) probabilities
+    # - adaptive recon wants: pred_logits (B, V, S_max) and targets (B, V)
+    # ---------------------------------------------------------------------
+    var_names = var_structure['variable_names']
+    var_to_states = var_structure['var_to_states']
+    n_vars = len(var_names)
+    n_states_per_var = torch.tensor([len(var_to_states[v]) for v in var_names], dtype=torch.long, device=observations.device)
+    s_max = int(n_states_per_var.max().item()) if n_vars > 0 else 0
+
+    var_state_idx = torch.full((n_vars, s_max), -1, dtype=torch.long, device=observations.device)
+    for vi, v in enumerate(var_names):
+        idxs = torch.tensor(var_to_states[v], dtype=torch.long, device=observations.device)
+        var_state_idx[vi, : idxs.numel()] = idxs
+    var_state_idx_safe = var_state_idx.clamp(min=0)
+
+    state_ids = torch.arange(s_max, device=observations.device).view(1, 1, s_max)
+    valid = state_ids < n_states_per_var.view(1, n_vars, 1)
+
+    obs_per_var = observations[:, var_state_idx_safe]
+    obs_per_var = obs_per_var.masked_fill(~valid, -1e9)
+    targets = torch.argmax(obs_per_var, dim=2)  # (B, V)
     
     # === 2. BUILD PRIORS ===
     print("\n[2/6] Building Priors...")
@@ -133,7 +179,6 @@ def train_complete(config: dict):
     fci_baseline_unresolved_ratio = None
     if config.get('fci_skeleton_path'):
         try:
-            import sys
             import pandas as pd
             sys.path.insert(0, str(Path(__file__).parent.parent / 'refactored'))
             from evaluate_fci import parse_fci_csv
@@ -228,22 +273,29 @@ def train_complete(config: dict):
     
     for epoch in range(config['n_epochs']):
         # === FORWARD PASS ===
-        predictions = model(observations, n_hops=config['n_hops'])
+        predictions_flat = model(observations, n_hops=config['n_hops'])  # (B, n_total_states) probabilities
         adjacency = model.get_adjacency()
         
         # === COMPUTE LOSS ===
-        losses = loss_computer.compute_total_loss(
-            predictions=predictions,
-            targets=observations,
-            adjacency=adjacency,
-            lambda_group=config['lambda_group'],
-            lambda_cycle=config['lambda_cycle'],
-            lambda_skeleton=config.get('lambda_skeleton', 0.1)  # Default: 0.1
+        pred_probs_per_var = predictions_flat[:, var_state_idx_safe]  # (B, V, S_max)
+        pred_probs_per_var = pred_probs_per_var.masked_fill(~valid, 0.0)
+        pred_logits = torch.log(pred_probs_per_var.clamp(min=1e-12))
+
+        loss_recon = trainer.compute_adaptive_recon_loss(pred_logits, targets)
+        loss_group = loss_computer.weighted_group_lasso_loss(adjacency)
+        loss_cycle = loss_computer.cycle_consistency_loss(adjacency)
+        loss_skeleton = loss_computer.skeleton_preservation_loss(adjacency)
+
+        loss_total = (
+            loss_recon
+            + lambda_group_effective * loss_group
+            + config['lambda_cycle'] * loss_cycle
+            + config.get('lambda_skeleton', 0.1) * loss_skeleton
         )
         
         # === BACKWARD PASS ===
         optimizer.zero_grad()
-        losses['total'].backward()
+        loss_total.backward()
         optimizer.step()
         
         # Clamp weights
@@ -270,11 +322,11 @@ def train_complete(config: dict):
                 
                 # Record history
                 history['epoch'].append(epoch + 1)
-                history['loss_total'].append(losses['total'].item())
-                history['loss_reconstruction'].append(losses['reconstruction'].item())
-                history['loss_group_lasso'].append(losses['weighted_group_lasso'].item())
-                history['loss_cycle'].append(losses['cycle_consistency'].item())
-                history['loss_skeleton'].append(losses['skeleton_preservation'].item())
+                history['loss_total'].append(loss_total.item())
+                history['loss_reconstruction'].append(loss_recon.item())
+                history['loss_group_lasso'].append(loss_group.item())
+                history['loss_cycle'].append(loss_cycle.item())
+                history['loss_skeleton'].append(loss_skeleton.item())
                 history['unresolved_ratio'].append(unresolved_stats['unresolved_ratio'])
                 history['overall_sparsity'].append(sparsity_stats['overall_sparsity'])
                 history['block_sparsity'].append(sparsity_stats['block_sparsity'])
@@ -284,11 +336,11 @@ def train_complete(config: dict):
                 # Print progress
                 print(f"\nEpoch {epoch + 1:3d}/{config['n_epochs']}")
                 print(f"  Losses:")
-                print(f"    Total:        {losses['total'].item():8.4f}")
-                print(f"    Recon:        {losses['reconstruction'].item():8.4f}")
-                print(f"    Group Lasso:  {losses['weighted_group_lasso'].item():8.4f}")
-                print(f"    Cycle:        {losses['cycle_consistency'].item():8.4f}")
-                print(f"    Skeleton:     {losses['skeleton_preservation'].item():8.4f}")
+                print(f"    Total:        {loss_total.item():8.4f}")
+                print(f"    Recon:        {loss_recon.item():8.4f}")
+                print(f"    Group Lasso:  {loss_group.item():8.4f}")
+                print(f"    Cycle:        {loss_cycle.item():8.4f}")
+                print(f"    Skeleton:     {loss_skeleton.item():8.4f}")
                 print(f"  Symmetry Breaking (Direction Learning):")
                 print(f"    Unresolved (Symmetric): {unresolved_stats['unresolved']:3d} / {unresolved_stats['total_pairs']:3d} "
                       f"({unresolved_stats['unresolved_ratio']*100:5.1f}%) [Want: DOWN]")
@@ -318,7 +370,8 @@ def train_complete(config: dict):
     evaluator.print_metrics(metrics)
     
     # === SAVE RESULTS ===
-    output_dir = Path(config['output_dir'])
+    # Backward-compatible defaults: prefer explicit output_dir, then results_dir, then 'results/complete'
+    output_dir = Path(config.get('output_dir') or config.get('results_dir') or 'results/complete')
     output_dir.mkdir(exist_ok=True, parents=True)
     
     # Save model

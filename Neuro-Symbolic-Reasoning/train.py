@@ -18,6 +18,7 @@ from modules.data_loader import CausalDataLoader
 from modules.prior_builder import PriorBuilder
 from modules.model import CausalDiscoveryModel
 from modules.loss import LossComputer
+from modules.trainer import CausalTrainer
 from modules.evaluator import CausalGraphEvaluator
 from modules.result_manager import ResultManager
 from modules.metrics import compute_unresolved_ratio, compute_sparsity_metrics
@@ -76,6 +77,54 @@ def main():
     
     data = data_loader.load_data()
     var_structure = data_loader.get_variable_structure()
+
+    # ------------------------------------------------------------------------
+    # Adaptive Reliability-Aware stats (baseline dominance, per-state frequency)
+    # ------------------------------------------------------------------------
+    trainer = CausalTrainer(
+        var_structure=var_structure,
+        dataset_tensor=data,
+        config=cfg,
+    )
+    print("\n" + "=" * 80)
+    print("ADAPTIVE RELIABILITY-AWARE STATS")
+    print("=" * 80)
+    print(f"Global baseline ratio: {trainer.dataset_stats.global_baseline_ratio:.3f}")
+    print(f"gamma_base: {trainer.gamma_base} (rule: >0.6 -> 0.1 else 1.0)")
+    print(f"gamma_noise: {trainer.gamma_noise}")
+    print(f"noise_threshold: {trainer.noise_threshold}")
+
+    # If baseline suppression is active, reduce Group Lasso relative strength
+    lambda_group_effective = cfg['lambda_group_lasso'] * (0.5 if trainer.gamma_base < 1.0 else 1.0)
+    if lambda_group_effective != cfg['lambda_group_lasso']:
+        print(f"[INFO] Effective lambda_group_lasso adjusted: {cfg['lambda_group_lasso']} -> {lambda_group_effective}")
+
+    # ------------------------------------------------------------------------
+    # Precompute per-variable indexing for adaptive reconstruction loss
+    # - model outputs: (B, n_total_states) probabilities
+    # - adaptive recon wants: pred_logits (B, V, S_max) and targets (B, V)
+    # ------------------------------------------------------------------------
+    var_names = var_structure['variable_names']
+    var_to_states = var_structure['var_to_states']
+    n_vars = len(var_names)
+    n_states_per_var = torch.tensor([len(var_to_states[v]) for v in var_names], dtype=torch.long, device=data.device)
+    s_max = int(n_states_per_var.max().item()) if n_vars > 0 else 0
+
+    # var_state_idx: (V, S_max) GLOBAL state indices (flattened one-hot), padded with -1
+    var_state_idx = torch.full((n_vars, s_max), -1, dtype=torch.long, device=data.device)
+    for vi, v in enumerate(var_names):
+        idxs = torch.tensor(var_to_states[v], dtype=torch.long, device=data.device)
+        var_state_idx[vi, : idxs.numel()] = idxs
+    var_state_idx_safe = var_state_idx.clamp(min=0)  # replace -1 with 0 for indexing; will be masked
+
+    # valid mask: (B, V, S_max) broadcastable (we keep it as (1,V,S_max))
+    state_ids = torch.arange(s_max, device=data.device).view(1, 1, s_max)
+    valid = state_ids < n_states_per_var.view(1, n_vars, 1)
+
+    # Targets are the observed LOCAL state index per variable (constant for this dataset tensor)
+    obs_per_var = data[:, var_state_idx_safe]  # (B, V, S_max) (padded cols duplicate state 0)
+    obs_per_var = obs_per_var.masked_fill(~valid, -1e9)
+    targets = torch.argmax(obs_per_var, dim=2)  # (B, V)
     
     timing['data_loading'] = time.time() - t_start
     print(f"\n[OK] Data loaded in {timing['data_loading']:.2f}s")
@@ -201,19 +250,26 @@ def main():
         optimizer.zero_grad()
         
         # Forward pass
-        logits = model(data, n_hops=cfg['n_hops'])
+        predictions_flat = model(data, n_hops=cfg['n_hops'])  # (B, n_total_states) probabilities
         
-        # Compute loss
+        # Build per-variable logits for adaptive CE loss
+        pred_probs_per_var = predictions_flat[:, var_state_idx_safe]  # (B, V, S_max)
+        pred_probs_per_var = pred_probs_per_var.masked_fill(~valid, 0.0)
+        pred_logits = torch.log(pred_probs_per_var.clamp(min=1e-12))  # treat as unnormalized log-probs
+
+        # Compute loss components (adaptive recon + existing structural losses)
         adjacency = model.get_adjacency()
-        loss_dict = loss_computer.compute_total_loss(
-            predictions=logits,
-            targets=data,
-            adjacency=adjacency,
-            lambda_group=cfg['lambda_group_lasso'],
-            lambda_cycle=cfg['lambda_cycle'],
-            lambda_skeleton=cfg.get('lambda_skeleton', 0.1)  # Default: 0.1
+        loss_recon = trainer.compute_adaptive_recon_loss(pred_logits, targets)
+        loss_group = loss_computer.weighted_group_lasso_loss(adjacency)
+        loss_cycle = loss_computer.cycle_consistency_loss(adjacency)
+        loss_skeleton = loss_computer.skeleton_preservation_loss(adjacency)
+
+        loss = (
+            loss_recon
+            + lambda_group_effective * loss_group
+            + cfg['lambda_cycle'] * loss_cycle
+            + cfg.get('lambda_skeleton', 0.1) * loss_skeleton
         )
-        loss = loss_dict['total']
         
         # Backward pass
         loss.backward()
@@ -244,11 +300,9 @@ def main():
                 # Record history
                 history['epoch'].append(epoch + 1)
                 history['loss_total'].append(loss.item())
-                history['loss_reconstruction'].append(loss_dict['reconstruction'].item())
-                history['loss_group_lasso'].append(loss_dict['weighted_group_lasso'].item())
-                # cycle_consistency is already a float, not a tensor
-                cycle_loss = loss_dict['cycle_consistency']
-                history['loss_cycle'].append(cycle_loss.item() if hasattr(cycle_loss, 'item') else cycle_loss)
+                history['loss_reconstruction'].append(loss_recon.item())
+                history['loss_group_lasso'].append(loss_group.item())
+                history['loss_cycle'].append(loss_cycle.item())
                 history['unresolved_ratio'].append(bidir_stats['unresolved_ratio'])
                 history['unresolved_count'].append(bidir_stats['unresolved'])
                 history['resolved_count'].append(bidir_stats['resolved'])
@@ -258,13 +312,12 @@ def main():
                 history['block_sparsity'].append(sparsity_stats['block_sparsity'])
                 
                 # Print comprehensive log
-                cycle_loss_val = loss_dict['cycle_consistency']
-                cycle_loss_val = cycle_loss_val.item() if hasattr(cycle_loss_val, 'item') else cycle_loss_val
                 print(f"\nEpoch {epoch+1:3d}/{n_epochs}")
                 print(f"  Loss: {loss.item():.4f} "
-                      f"(Recon: {loss_dict['reconstruction'].item():.4f}, "
-                      f"Lasso: {loss_dict['weighted_group_lasso'].item():.4f}, "
-                      f"Cycle: {cycle_loss_val:.4f})")
+                      f"(Recon: {loss_recon.item():.4f}, "
+                      f"Lasso: {loss_group.item():.4f}, "
+                      f"Cycle: {loss_cycle.item():.4f}, "
+                      f"Skel: {loss_skeleton.item():.4f})")
                 print(f"  Direction: Unresolved {bidir_stats['unresolved_ratio']*100:.1f}% "
                       f"({bidir_stats['unresolved']}/{bidir_stats['total_pairs']} pairs)")
                 print(f"  Sparsity: Overall {sparsity_stats['overall_sparsity']*100:.1f}%, "
