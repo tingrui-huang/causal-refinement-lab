@@ -11,6 +11,7 @@ import os
 import csv
 import subprocess
 from pathlib import Path
+import re
 
 
 class BaseAlgorithm:
@@ -457,6 +458,134 @@ class RFCIAlgorithm(BaseAlgorithm):
         print(f"[RFCI]   Tail-tail (--):     {tail_tail}")
 
         self.graph = graph
+        return graph
+
+    def get_ambiguous_edges(self):
+        """
+        Extract edges with ambiguous direction from the RFCI PAG output.
+
+        Returns:
+          list of (node_a, node_b, edge_type) tuples, similar to FCIAlgorithm.get_ambiguous_edges.
+
+        Notes:
+          - We skip bidirected edges (<->) because they represent latent confounding, not ambiguity.
+          - Tetrad CSV edge types are mapped into a small set compatible with the hybrid LLM scripts:
+              partial    -> 'o->'  (direction ambiguous at the tail/circle end)
+              undirected -> 'o-o'
+              tail-tail  -> '--'
+          - If the Java runner ever emits other ambiguous types, we conservatively pass them through.
+        """
+        if self.graph is None:
+            print("[WARNING] RFCI has not been run yet!")
+            return []
+
+        ambiguous = []
+        seen_pairs = set()
+
+        for u, v, d in self.graph.edges(data=True):
+            et = d.get("type", "directed")
+            if et == "bidirected":
+                continue
+
+            if et == "partial":
+                out_type = "o->"
+            elif et == "undirected":
+                out_type = "o-o"
+            elif et == "tail-tail":
+                out_type = "--"
+            else:
+                # Not ambiguous (directed, rejected, etc.)
+                continue
+
+            key = tuple(sorted((u, v)))
+            if key in seen_pairs and out_type == "o-o":
+                continue
+            seen_pairs.add(key)
+            ambiguous.append((u, v, out_type))
+
+        print(f"[RFCI] Found {len(ambiguous)} ambiguous edges for LLM arbitration")
+        print(f"[RFCI] (Bidirected edges excluded - they represent latent confounders)")
+        return ambiguous
+
+    @staticmethod
+    def load_graph_from_edges_csv(edges_csv_path: str, nodes: list[str] | None = None):
+        """
+        Load a NetworkX graph from an edges_RFCI_*.csv produced by the Tetrad runner.
+
+        Expected columns: source,target,edge_type,status (status optional).
+        """
+        import networkx as nx
+
+        p = Path(edges_csv_path)
+        if not p.exists():
+            raise FileNotFoundError(p)
+
+        graph = nx.DiGraph()
+        if nodes is not None:
+            graph.add_nodes_from(nodes)
+
+        with p.open("r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                u = row.get("source")
+                v = row.get("target")
+                edge_type = row.get("edge_type", "directed")
+                status = row.get("status", "accepted")
+                if status == "rejected":
+                    graph.add_edge(u, v, type="rejected")
+                else:
+                    graph.add_edge(u, v, type=edge_type)
+
+        return graph
+
+    @staticmethod
+    def load_graph_from_report_txt(report_path: str, nodes: list[str] | None = None):
+        """
+        Best-effort loader from refactored/report_RFCI_*.txt (human-readable report).
+
+        Parses lines like:
+          [YES] A -> B
+          [YES] A o-> B
+          [YES] A o-o B
+          [YES] A <-> B
+          [YES] A -- B
+
+        Returns a DiGraph with edge attribute 'type' matching:
+          directed | partial | undirected | bidirected | tail-tail
+        """
+        import networkx as nx
+
+        p = Path(report_path)
+        if not p.exists():
+            raise FileNotFoundError(p)
+
+        graph = nx.DiGraph()
+        if nodes is not None:
+            graph.add_nodes_from(nodes)
+
+        # Match: "[YES] <u> <etype> <v>"
+        pat = re.compile(r"\[YES\]\s+(\S+)\s+(->|o->|o-o|<->|--)\s+(\S+)")
+
+        for line in p.read_text(encoding="utf-8", errors="ignore").splitlines():
+            m = pat.search(line)
+            if not m:
+                continue
+            u, et_sym, v = m.group(1), m.group(2), m.group(3)
+
+            if et_sym == "->":
+                graph.add_edge(u, v, type="directed")
+            elif et_sym == "o->":
+                graph.add_edge(u, v, type="partial")
+            elif et_sym == "o-o":
+                graph.add_edge(u, v, type="undirected")
+                graph.add_edge(v, u, type="undirected")
+            elif et_sym == "<->":
+                graph.add_edge(u, v, type="bidirected")
+                graph.add_edge(v, u, type="bidirected")
+            elif et_sym == "--":
+                graph.add_edge(u, v, type="tail-tail")
+                graph.add_edge(v, u, type="tail-tail")
+
         return graph
 
 

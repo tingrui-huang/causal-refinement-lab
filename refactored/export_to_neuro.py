@@ -20,12 +20,19 @@ def find_latest_file(pattern, directory=OUTPUT_DIR):
     if not output_path.exists():
         return None
     
+    def _pick(files):
+        # Avoid accidentally exporting debug/smoke artifacts
+        files = [p for p in files if "smoke" not in p.name.lower() and "tmp" not in p.name.lower()]
+        return max(files, key=lambda p: p.stat().st_mtime) if files else None
+
     # Try dataset-specific directory first (e.g., output/alarm/)
     dataset_dir = output_path / DATASET
     if dataset_dir.exists():
         files = list(dataset_dir.glob(pattern))
         if files:
-            return max(files, key=lambda p: p.stat().st_mtime)
+            picked = _pick(files)
+            if picked:
+                return picked
     
     # Fall back to root output directory
     files = list(output_path.glob(pattern))
@@ -33,7 +40,8 @@ def find_latest_file(pattern, directory=OUTPUT_DIR):
     if not files:
         return None
     
-    return max(files, key=lambda p: p.stat().st_mtime)
+    picked = _pick(files)
+    return picked
 
 
 def export_fci():
@@ -75,15 +83,27 @@ def export_llm(llm_name='GPT35'):
     print("=" * 80)
     
     # Find latest LLM CSV
-    # Pattern: edges_FCI_LLM_GPT35_*.csv or edges_FCI_LLM_Zephyr_*.csv
-    pattern = f'edges_FCI_LLM_{llm_name}_*.csv'
-    latest_llm = find_latest_file(pattern)
+    # Prefer RFCI_LLM if present (for large graphs like link/pigs), otherwise FCI_LLM.
+    patterns = [
+        f'edges_RFCI_LLM_{llm_name}_*.csv',
+        f'edges_FCI_LLM_{llm_name}_*.csv',
+    ]
+    latest_llm = None
+    used_pattern = None
+    for pat in patterns:
+        hit = find_latest_file(pat)
+        if hit:
+            latest_llm = hit
+            used_pattern = pat
+            break
     
     if not latest_llm:
-        print(f"[WARN] No {llm_name} CSV found (pattern: {pattern}). Skipping {llm_name} export.")
+        print(f"[WARN] No {llm_name} CSV found (patterns: {patterns}). Skipping {llm_name} export.")
         return None
     
     print(f"Found: {latest_llm.name}")
+    if used_pattern:
+        print(f"  (matched: {used_pattern})")
     
     # Destination
     neuro_data_dir = Path(NEURO_SYMBOLIC_DATA_DIR)

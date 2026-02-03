@@ -27,7 +27,7 @@ from utils import get_active_data_loader, print_dataset_info
 
 # Import modules from the modules package
 from modules.data_loader import DataLoader, LUCASDataLoader, ALARMDataLoader
-from modules.algorithms import FCIAlgorithm
+from modules.algorithms import FCIAlgorithm, RFCIAlgorithm
 from modules.api_clients import ZephyrClient
 from modules.prompt_generators import ZephyrCoTPromptGenerator
 from modules.parsers import RobustDirectionParser
@@ -50,8 +50,17 @@ class FCIZephyrPipeline:
         self.data_loader = data_loader
         self.df, self.nodes = self.data_loader.load_csv()
 
-        print("\n[2/6] Setting up FCI algorithm...")
-        self.fci_algo = FCIAlgorithm(self.df, self.nodes)
+        # Select constraint-based algorithm (FCI vs RFCI) based on unified config.
+        from config import get_current_dataset_config
+        ds_cfg = get_current_dataset_config()
+        self.constraint_algo = str(ds_cfg.get("constraint_algo", "fci")).lower()
+
+        if self.constraint_algo == "rfci":
+            print("\n[2/6] Setting up RFCI algorithm (Tetrad)...")
+            self.fci_algo = RFCIAlgorithm(self.df, self.nodes, data_path=str(self.data_loader.data_path))
+        else:
+            print("\n[2/6] Setting up FCI algorithm...")
+            self.fci_algo = FCIAlgorithm(self.df, self.nodes)
 
         print("\n[3/6] Connecting to Zephyr-7B API...")
         self.llm_client = ZephyrClient(hf_token)
@@ -81,15 +90,46 @@ class FCIZephyrPipeline:
         print(f"Validation alpha: {validation_alpha}")
         print(f"{'='*60}\n")
         
-        # Step 1: Run FCI
+        # Step 1: Run constraint-based discovery (FCI or RFCI)
         print("\n" + "=" * 60)
-        print("STEP 1: Running FCI Algorithm")
+        print(f"STEP 1: Running {self.constraint_algo.upper()} Algorithm")
         print("=" * 60)
-        
-        # Use chisq for discrete data
-        self.graph = self.fci_algo.run(independence_test='chisq', alpha=fci_alpha)
-        
-        print(f"\n[FCI] Initial graph has {self.graph.number_of_edges()} edges")
+
+        if self.constraint_algo == "rfci":
+            from config import RFCI_ALPHA, RFCI_DEPTH, RFCI_MAX_DISC_PATH_LEN, RFCI_MAX_ROWS, VERBOSE as CFG_VERBOSE
+            out_dir = Path(get_output_dir())
+
+            # Reuse cached RFCI outputs if present (avoid expensive reruns).
+            cached_csv = sorted(out_dir.glob("edges_RFCI_*.csv"), key=lambda p: p.stat().st_mtime, reverse=True)
+            cached_report = sorted(out_dir.glob("report_RFCI_*.txt"), key=lambda p: p.stat().st_mtime, reverse=True)
+
+            if cached_csv:
+                print(f"[RFCI] Using cached edges CSV: {cached_csv[0].name}")
+                self.graph = RFCIAlgorithm.load_graph_from_edges_csv(str(cached_csv[0]), nodes=self.nodes)
+                # Ensure downstream ambiguous-edge extraction uses the cached graph
+                self.fci_algo.graph = self.graph
+            elif cached_report:
+                print(f"[RFCI] Using cached report: {cached_report[0].name} (parsing edges)")
+                self.graph = RFCIAlgorithm.load_graph_from_report_txt(str(cached_report[0]), nodes=self.nodes)
+                # Ensure downstream ambiguous-edge extraction uses the cached graph
+                self.fci_algo.graph = self.graph
+            else:
+                alpha = RFCI_ALPHA
+                if abs(alpha - float(fci_alpha)) > 1e-12:
+                    print(f"[INFO] RFCI_ALPHA={alpha} overrides fci_alpha={fci_alpha} for RFCI runs")
+                self.graph = self.fci_algo.run(
+                    alpha=float(alpha),
+                    depth=int(RFCI_DEPTH),
+                    max_disc_path_len=int(RFCI_MAX_DISC_PATH_LEN),
+                    max_rows=RFCI_MAX_ROWS,
+                    verbose=bool(CFG_VERBOSE),
+                    output_edges_path=str(out_dir / f"edges_RFCI_{self.timestamp}.csv"),
+                )
+        else:
+            from config import FCI_INDEPENDENCE_TEST
+            self.graph = self.fci_algo.run(independence_test=FCI_INDEPENDENCE_TEST, alpha=fci_alpha)
+
+        print(f"\n[{self.constraint_algo.upper()}] Initial graph has {self.graph.number_of_edges()} edges")
         self._print_fci_statistics()
         
         # Step 2: Extract ambiguous edges
@@ -204,22 +244,26 @@ class FCIZephyrPipeline:
         print(f"\n{'='*60}")
         print("Saving Results")
         print(f"{'='*60}")
+
+        # Name outputs based on constraint algorithm (FCI vs RFCI)
+        algo_tag = "RFCI" if str(getattr(self, "constraint_algo", "fci")).lower() == "rfci" else "FCI"
+        model_name = f"{algo_tag}_LLM_Zephyr"
         
         # Save LLM call log
-        self.reporter.save_cot_log(self.llm_client.call_log, "hybrid_fci_zephyr")
+        self.reporter.save_cot_log(self.llm_client.call_log, f"hybrid_{algo_tag.lower()}_zephyr")
         
         # Save text report
         self.reporter.save_text_report(self.graph, 
-                                      model_name="FCI_LLM_Zephyr",
+                                      model_name=model_name,
                                       cot_log=self.llm_client.call_log)
         
         # Save edge list
-        self.reporter.save_edge_list(self.graph, model_name="FCI_LLM_Zephyr")
+        self.reporter.save_edge_list(self.graph, model_name=model_name)
         
         # Save visualization
-        filename = f"causal_graph_fci_llm_zephyr_{self.timestamp}"
+        filename = f"causal_graph_{algo_tag.lower()}_llm_zephyr_{self.timestamp}"
         self.visualizer.visualize(self.graph, 
-                                 title="Causal Graph (FCI + LLM Zephyr-7B)",
+                                 title=f"Causal Graph ({algo_tag} + LLM Zephyr-7B)",
                                  filename=filename,
                                  save_only=False,
                                  node_color='lightblue',

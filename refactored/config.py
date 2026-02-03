@@ -30,10 +30,13 @@ RFCI_MAX_DISC_PATH_LEN = getattr(unified_config, "RFCI_MAX_DISC_PATH_LEN", -1)
 RFCI_MAX_ROWS = getattr(unified_config, "RFCI_MAX_ROWS", None)
 VALIDATION_ALPHA = unified_config.VALIDATION_ALPHA
 LLM_MODEL = unified_config.LLM_MODEL
+LLM_TEMPERATURE = getattr(unified_config, "LLM_TEMPERATURE", 0.0)
+LLM_MAX_TOKENS = getattr(unified_config, "LLM_MAX_TOKENS", 500)
 FCI_OUTPUT_DIR = unified_config.FCI_OUTPUT_DIR
 get_fci_config = unified_config.get_fci_config
 print_unified_config = unified_config.print_config
 VERBOSE = getattr(unified_config, "VERBOSE", False)
+RANDOM_SEED = getattr(unified_config, "RANDOM_SEED", 0)
 
 # Per-dataset overrides (if provided in DATASET_CONFIGS[DATASET])
 _ds_cfg = get_current_dataset_config()

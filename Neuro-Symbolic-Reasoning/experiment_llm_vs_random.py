@@ -22,6 +22,7 @@ UPDATED: Now uses weaker initialization (0.6/0.4 instead of 0.7/0.3)
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import time
 from pathlib import Path
@@ -70,7 +71,21 @@ def run_experiment_for_dataset(dataset_name: str,
     # - pigs/link may use RFCI instead of FCI (edges_RFCI_*.csv).
     # - Some datasets/runs may NOT have LLM outputs at all. In that case we should still
     #   be able to run Random Prior only.
-    pure_skeleton_path = config._auto_detect_latest_file_any(
+    # NOTE: edges_FCI_*.csv would also match edges_FCI_LLM_*.csv.
+    # For "pure" constraint skeleton we must EXCLUDE any file containing "LLM".
+    def _auto_detect_latest_non_llm(patterns, directory):
+        from pathlib import Path
+        d = Path(directory)
+        if not d.exists():
+            return None
+        for pat in patterns:
+            hits = [p for p in d.glob(pat) if "LLM" not in p.name.upper()]
+            if hits:
+                latest = max(hits, key=lambda p: p.stat().st_mtime)
+                return str(latest)
+        return None
+
+    pure_skeleton_path = _auto_detect_latest_non_llm(
         ["edges_RFCI_*.csv", "edges_FCI_*.csv"],
         config.FCI_OUTPUT_DIR / dataset_name,
     )
@@ -78,6 +93,31 @@ def run_experiment_for_dataset(dataset_name: str,
         ["edges_RFCI_LLM_*.csv", "edges_FCI_LLM_*.csv"],
         config.FCI_OUTPUT_DIR / dataset_name,
     )
+
+    # -------------------------------------------------------------------------
+    # Training cache: if an experiment output_dir already contains saved results,
+    # skip re-training and just load metrics/history.
+    # -------------------------------------------------------------------------
+    def _try_load_cached_training(output_dir: Union[str, Path]) -> Optional[Dict]:
+        out = Path(output_dir)
+        metrics_path = out / "complete_metrics.json"
+        history_path = out / "complete_history.json"
+        if metrics_path.exists() and history_path.exists():
+            try:
+                metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+                history = json.loads(history_path.read_text(encoding="utf-8"))
+                return {
+                    "metrics": metrics,
+                    "history": history,
+                    "model": None,  # not needed for evaluation reporting here
+                    "fci_baseline_unresolved_ratio": None,
+                    "cached": True,
+                    "output_dir": str(out),
+                }
+            except Exception as e:
+                print(f"[WARN] Failed to load cached results from {out}: {e}")
+                return None
+        return None
 
     requested_mode = run_mode
     effective_mode = run_mode
@@ -181,7 +221,12 @@ def run_experiment_for_dataset(dataset_name: str,
             'output_dir': f'results/experiment_llm_vs_random/{dataset_name}/seed_{random_seed}/llm_prior'
         })
 
-        results_llm = train_complete(config_llm)
+        cached = _try_load_cached_training(config_llm["output_dir"])
+        if cached:
+            print(f"\n[CACHE] Found existing LLM-prior training results at: {cached['output_dir']}")
+            results_llm = cached
+        else:
+            results_llm = train_complete(config_llm)
 
     if effective_mode in ['both', 'random']:
         # Experiment 2: Random Prior (Control)
@@ -198,7 +243,12 @@ def run_experiment_for_dataset(dataset_name: str,
             'output_dir': f'results/experiment_llm_vs_random/{dataset_name}/seed_{random_seed}/random_prior'
         })
         
-        results_random = train_complete(config_random)
+        cached = _try_load_cached_training(config_random["output_dir"])
+        if cached:
+            print(f"\n[CACHE] Found existing RANDOM-prior training results at: {cached['output_dir']}")
+            results_random = cached
+        else:
+            results_random = train_complete(config_random)
     
     # ============================================================================
     # Comparison (only if both experiments were run)
@@ -437,7 +487,7 @@ def main():
     #   datasets = ['alarm', 'sachs', 'andes']  # 跑三个
     #
     # 可选数据集：'alarm', 'sachs', 'andes', 'child', 'hailfinder', 'insurance', 'win95pts'
-    datasets = ['link']  # ← 改这里！(or use CLI: --datasets ...)
+    datasets = ['pigs']  # ← 改这里！(or use CLI: --datasets ...)
     
     # 选择要运行的实验类型
     # 'both'   - 运行 LLM 和 Random 两个实验（完整对比）
@@ -456,7 +506,7 @@ def main():
     low_confidence = 0.1   # 弱方向的权重（0.0-0.5）
     
     # 训练轮数
-    n_epochs = 200
+    n_epochs = 500
     # ← 改这里！(推荐: sachs=300, alarm=1000, andes=1500,hailfinder=1000 )
     # ============================================================================
 
