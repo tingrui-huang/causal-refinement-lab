@@ -24,7 +24,7 @@ NEURO_SYMBOLIC_DIR = PROJECT_ROOT / 'Neuro-Symbolic-Reasoning'
 # DATASET SELECTION
 # ============================================================================
 # Options: 'alarm', 'insurance', 'sachs', 'child', 'hailfinder', 'win95pts', 'tuebingen_pair0001', etc.
-DATASET = 'link'
+DATASET = 'pigs'
 
 # ============================================================================
 # STEP 1: FCI ALGORITHM SETTINGS
@@ -67,7 +67,7 @@ VALIDATION_ALPHA = 0.01
 #   - 'gpt-3.5-turbo' (GPT-3.5)
 #   - 'gpt-4' (GPT-4)
 #   - 'zephyr-7b' (Zephyr)
-LLM_MODEL = 'none'  # Set to None for FCI-only pipeline (testing GSB framework)
+LLM_MODEL = 'gpt-3.5-turbo'  # Set to None for FCI-only pipeline (testing GSB framework)
 
 # Use LLM prior for direction initialization in neural training?
 USE_LLM_PRIOR = True  # LLM prior enabled - using semantic variable names
@@ -87,7 +87,7 @@ BATCH_SIZE = None  # None = full batch
 
 # Regularization
 LAMBDA_GROUP_LASSO = 0.01  # Group lasso penalty weight
-LAMBDA_CYCLE = 0.0005    # Cycle consistency penalty weight
+LAMBDA_CYCLE = 0.001    # Cycle consistency penalty weight
 LAMBDA_SKELETON = 0.1    # Skeleton preservation penalty weight (NEW!)
 # alarm is 0.01, 0.005, insurance is 0.001,0.05, different datasets have different configurations.
 # Sachs for these two should be as much lower as possible, like 0 and 0.001
@@ -97,7 +97,7 @@ LAMBDA_SKELETON = 0.1    # Skeleton preservation penalty weight (NEW!)
 
 
 # Threshold for edge detection
-THRESHOLD = 0.1
+THRESHOLD = 0.8
 # Lower = more edges, Higher = fewer edges Sachs dataset should be lower, like 0.008
 # child is 0.05
 # hailfinder is 0.05
@@ -375,6 +375,27 @@ DATASET_CONFIGS = {
         'rfci_depth': 2,
         'rfci_max_disc_path_len': 2,
         'rfci_max_rows': 20000,
+
+        # FCI/LLM outputs (auto-detected, leave as None)
+        'fci_skeleton_path': None,
+        'llm_direction_path': None,
+    },
+
+    'hepar2': {
+        # Data files
+        'fci_data_path': PROJECT_ROOT / 'hepar2_data_variable.csv',  # Variable-level data for FCI/RFCI
+        'data_path': NEURO_SYMBOLIC_DIR / 'data' / 'HEPAR2' / 'hepar2_data_10000.csv',  # One-hot for training
+        'metadata_path': NEURO_SYMBOLIC_DIR / 'data' / 'HEPAR2' / 'metadata.json',
+
+        # Ground truth (for evaluation)
+        'ground_truth_path': NEURO_SYMBOLIC_DIR / 'data' / 'HEPAR2' / 'hepar2.bif',
+        'ground_truth_type': 'bif',
+
+        # Data type
+        'data_type': 'discrete',
+
+        # Default constraint algo (HEPAR2 is moderate-size; can switch to 'rfci' if needed)
+        'constraint_algo': 'fci',
 
         # FCI/LLM outputs (auto-detected, leave as None)
         'fci_skeleton_path': None,

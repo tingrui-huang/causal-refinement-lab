@@ -39,9 +39,9 @@ if str(NSR_DIR) not in sys.path:
 # --------------------------------------------------------------------------------------
 # DEFAULTS (edit these like config.py style; CLI is optional)
 # --------------------------------------------------------------------------------------
-DEFAULT_DATASET = "andes"
-DEFAULT_SEEDS = [0,1,2,3,4]
-DEFAULT_EPOCHS = 1500
+DEFAULT_DATASET = "pigs"
+DEFAULT_SEEDS = [0,1,2,3,4,5]
+DEFAULT_EPOCHS = 2000
 DEFAULT_LR = 0.01
 
 # If None, dataset-specific defaults are used (see below)

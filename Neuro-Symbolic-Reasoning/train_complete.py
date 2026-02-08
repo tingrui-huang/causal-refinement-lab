@@ -26,6 +26,7 @@ from modules.model import CausalDiscoveryModel
 from modules.loss import LossComputer
 from modules.evaluator import CausalGraphEvaluator
 from modules.metrics import compute_unresolved_ratio, compute_sparsity_metrics
+from modules.dag_check import find_one_cycle, is_dag_kahn, cycle_to_string
 
 
 def train_complete(config: dict):
@@ -95,7 +96,9 @@ def train_complete(config: dict):
         use_random_prior=config.get('use_random_prior', False),  # Whether to use random prior (control experiment)
         random_seed=config.get('random_seed'),  # Random seed for reproducibility (recommended)
         high_confidence=config.get('high_confidence', 0.7),  # High confidence weight (customizable)
-        low_confidence=config.get('low_confidence', 0.3)  # Low confidence weight (customizable)
+        low_confidence=config.get('low_confidence', 0.3),  # Low confidence weight (customizable)
+        enforce_vstructure=bool(config.get("enforce_vstructure_mask", False)),
+        vstructure_pag_csv_path=config.get("vstructure_pag_csv_path"),
     )
     
     # === 3. INITIALIZE MODEL ===
@@ -316,6 +319,63 @@ def train_complete(config: dict):
     learned_edges = evaluator.extract_learned_edges(adjacency, threshold=config['edge_threshold'])
     metrics = evaluator.evaluate(learned_edges)
     evaluator.print_metrics(metrics)
+
+    # === OPTIONAL: DAG CHECK (acyclic + directedness reason) ===
+    dag_check = None
+    if bool(config.get("dag_check", False)):
+        try:
+            # Directedness proxy: unresolved_ratio_final (symmetric pairs) > 0 => not fully directed.
+            # Use history if available; else compute quickly from current adjacency.
+            if history.get("unresolved_ratio"):
+                unresolved_ratio_final = float(history["unresolved_ratio"][-1])
+            else:
+                unresolved_ratio_final = float(
+                    compute_unresolved_ratio(adjacency, priors["blocks"], threshold=config.get("edge_threshold", 0.3)).get(
+                        "unresolved_ratio", 0.0
+                    )
+                )
+
+            nodes = set(var_structure.get("variable_names", []))
+            for u, v in learned_edges:
+                nodes.add(u)
+                nodes.add(v)
+
+            is_dag = bool(is_dag_kahn(nodes, learned_edges))
+            cyc = None if is_dag else find_one_cycle(nodes, learned_edges)
+
+            dag_check = {
+                "is_dag": is_dag,
+                "unresolved_ratio_final": unresolved_ratio_final,
+                "not_directed": bool(unresolved_ratio_final > 0.0),
+                "not_acyclic": bool(not is_dag),
+                "cycle_example": cycle_to_string(cyc) if cyc else None,
+                "num_nodes": int(len(nodes)),
+                "num_edges": int(len(learned_edges)),
+            }
+
+            # Save to output dir (alongside other complete_* artifacts)
+            try:
+                output_dir = Path(config["output_dir"])
+                output_dir.mkdir(exist_ok=True, parents=True)
+                with open(output_dir / "complete_dag_check.json", "w", encoding="utf-8") as f:
+                    json.dump(dag_check, f, indent=2)
+            except Exception:
+                pass
+
+            print("\n" + "-" * 70)
+            print("DAG CHECK")
+            print("-" * 70)
+            print(f"is_dag: {dag_check['is_dag']}")
+            if not dag_check["is_dag"]:
+                print(f"reason.not_directed: {dag_check['not_directed']} (unresolved_ratio_final={unresolved_ratio_final:.4f})")
+                print(f"reason.not_acyclic:  {dag_check['not_acyclic']}")
+                if dag_check["cycle_example"]:
+                    print(f"cycle_example: {dag_check['cycle_example']}")
+            else:
+                print(f"unresolved_ratio_final={unresolved_ratio_final:.4f}")
+            print("-" * 70)
+        except Exception as e:
+            print(f"[WARN] DAG check failed: {e}")
     
     # === SAVE RESULTS ===
     output_dir = Path(config['output_dir'])
@@ -401,6 +461,16 @@ def train_complete(config: dict):
         f.write(f"  Orientation Accuracy: {metrics['orientation_accuracy']*100:.1f}%\n")
         f.write(f"  Learned Edges: {metrics['learned_edges']}\n")
         f.write(f"  Ground Truth Edges: {metrics['ground_truth_edges']}\n")
+        if dag_check is not None:
+            f.write("\nDAG Check:\n")
+            f.write(f"  is_dag: {dag_check.get('is_dag')}\n")
+            if not dag_check.get("is_dag"):
+                f.write(f"  reason.not_directed: {dag_check.get('not_directed')} (unresolved_ratio_final={dag_check.get('unresolved_ratio_final')})\n")
+                f.write(f"  reason.not_acyclic:  {dag_check.get('not_acyclic')}\n")
+                if dag_check.get("cycle_example"):
+                    f.write(f"  cycle_example: {dag_check.get('cycle_example')}\n")
+            else:
+                f.write(f"  unresolved_ratio_final: {dag_check.get('unresolved_ratio_final')}\n")
     
     print(f"\nResults saved to: {output_dir}")
     
@@ -411,6 +481,8 @@ def train_complete(config: dict):
         'history': history,
         'fci_baseline_unresolved_ratio': fci_baseline_unresolved_ratio
     }
+    if dag_check is not None:
+        results["dag_check"] = dag_check
     
     return results
 
