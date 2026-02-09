@@ -49,7 +49,8 @@ def run_experiment_for_dataset(dataset_name: str,
                                vstructure_fci_csv_path: Optional[str] = None,
                                run_id: Optional[str] = None,
                                vstructure_in_mask: bool = False,
-                               dag_check: bool = False):
+                               dag_check: bool = False,
+                               dag_project_on_cycle: bool = False):
     """
     Run LLM vs Random experiment for a specific dataset
     
@@ -65,6 +66,7 @@ def run_experiment_for_dataset(dataset_name: str,
         run_id: Optional run identifier used for output folder naming. If None, uses a timestamp.
         vstructure_in_mask: If True, enforce inferred v-structure constraints directly on the skeleton mask during training.
         dag_check: If True, run DAG check (directedness + acyclicity) after training and save complete_dag_check.json.
+        dag_project_on_cycle: If True, when cyclic, cut weakest edge(s) on cycles until acyclic; saves complete_*_dag artifacts.
     """
     print("\n" + "=" * 80)
     print(f"EXPERIMENT: {dataset_name.upper()} DATASET")
@@ -204,19 +206,19 @@ def run_experiment_for_dataset(dataset_name: str,
     if dataset_name == 'sachs':
         lambda_group = 0.01
         lambda_cycle = 0.001
-        edge_threshold = 0.08
+        edge_threshold = 0.1
     elif dataset_name == 'alarm':
         lambda_group = 0.01
         lambda_cycle = 0.001
-        edge_threshold = 0.08
+        edge_threshold = 0.1
     elif dataset_name == 'andes':
-        lambda_group = 0.05
-        lambda_cycle = 0.05
-        edge_threshold = 0.08
+        lambda_group = 0.01
+        lambda_cycle = 0.005
+        edge_threshold = 0.1
     elif dataset_name == 'child':
         lambda_group = 0.005
         lambda_cycle = 0.001
-        edge_threshold = 0.08
+        edge_threshold = 0.1
     elif dataset_name == 'hailfinder':
         lambda_group = 0.01
         lambda_cycle = 0.001
@@ -228,7 +230,7 @@ def run_experiment_for_dataset(dataset_name: str,
     elif dataset_name == 'insurance':
         lambda_group = 0.01
         lambda_cycle = 0.001
-        edge_threshold = 0.08
+        edge_threshold = 0.05
     else:
         # Default values
         lambda_group = 0.01
@@ -252,6 +254,7 @@ def run_experiment_for_dataset(dataset_name: str,
         'low_confidence': low_conf,    # Pass to prior builder
         'random_seed': random_seed,    # For reproducibility (training + random prior)
         'dag_check': bool(dag_check),
+        'dag_project_on_cycle': bool(dag_project_on_cycle),
     }
 
     # ============================================================================
@@ -268,10 +271,15 @@ def run_experiment_for_dataset(dataset_name: str,
 
         config_llm = base_config.copy()
         config_llm.update({
-            'fci_skeleton_path': str(llm_skeleton_path),      # Use FCI+LLM skeleton (LLM-filtered edges)
-            'llm_direction_path': str(llm_skeleton_path),     # Same file for direction
+            # IMPORTANT: For fair comparison, hard skeleton must come from PURE FCI/RFCI (no LLM).
+            # The only difference vs random should be the *direction prior* initialization.
+            'fci_skeleton_path': str(pure_skeleton_path),
+            'llm_direction_path': str(llm_skeleton_path),     # LLM CSV used ONLY for soft direction prior
             'use_llm_prior': True,
             'use_random_prior': False,
+            # Optional: training-time v-structure hard mask (must be identical across LLM vs Random runs)
+            'enforce_vstructure_mask': bool(vstructure_in_mask),
+            'vstructure_pag_csv_path': str(vstructure_fci_csv_path) if vstructure_fci_csv_path else str(pure_skeleton_path),
             'output_dir': f'results/experiment_llm_vs_random/{dataset_name}/seed_{random_seed}/{run_id}/llm_prior',
             'run_id': run_id,
         })
@@ -591,6 +599,17 @@ def main():
         action="store_true",
         help="Override: disable DAG check. If omitted, uses the defaults below.",
     )
+    proj_group = ap.add_mutually_exclusive_group()
+    proj_group.add_argument(
+        "--dag_project_on_cycle",
+        action="store_true",
+        help="Override: if a directed cycle exists, cut weakest edge(s) on cycles until acyclic; saves complete_*_dag artifacts. If omitted, uses defaults below.",
+    )
+    proj_group.add_argument(
+        "--no_dag_project_on_cycle",
+        action="store_true",
+        help="Override: disable DAG projection-on-cycle. If omitted, uses defaults below.",
+    )
     args = ap.parse_args()
     
     # ============================================================================
@@ -608,13 +627,13 @@ def main():
     #   datasets = ['alarm', 'sachs', 'andes']  # 跑三个
     #
     # 可选数据集：'alarm', 'sachs', 'andes', 'child', 'hailfinder', 'insurance', 'win95pts'
-    datasets = ['pigs']  # ← 改这里！(or use CLI: --datasets ...)
+    datasets = ['insurance']  # ← 改这里！(or use CLI: --datasets ...)
     
     # 选择要运行的实验类型
     # 'both'   - 运行 LLM 和 Random 两个实验（完整对比）
     # 'llm'    - 只运行 LLM Prior 实验
     # 'random' - 只运行 Random Prior 实验
-    run_mode = 'random'  # ← 改这里！(or use CLI: --run_mode ...)
+    run_mode = ('llm')  # ← 改这里！(or use CLI: --run_mode ...)
 
     # Random seeds: can be a single int or a list of ints
     # Example:
@@ -627,7 +646,7 @@ def main():
     low_confidence = 0.1   # 弱方向的权重（0.0-0.5）
     
     # 训练轮数
-    n_epochs = 60   # Optional postprocess
+    n_epochs = 140  # Optional postprocess
     use_vstructure_postprocess = False
     vstructure_fci_csv_path = None
     run_id = None
@@ -637,6 +656,8 @@ def main():
     vstructure_in_mask = True
     # DAG check (post-training): saves complete_dag_check.json in each run dir.
     dag_check = True
+    # If cyclic, optionally project to DAG by cutting weakest edge(s) on cycles.
+    dag_project_on_cycle = True
     # ← 改这里！(推荐: sachs=300, alarm=1000, andes=1500,hailfinder=1000 )
     # ============================================================================
 
@@ -668,6 +689,10 @@ def main():
         dag_check = True
     if args.no_dag_check:
         dag_check = False
+    if args.dag_project_on_cycle:
+        dag_project_on_cycle = True
+    if args.no_dag_project_on_cycle:
+        dag_project_on_cycle = False
 
     # Normalize seeds to list[int]
     if isinstance(seeds, int):
@@ -695,6 +720,7 @@ def main():
                     vstructure_in_mask=vstructure_in_mask,
                     # Make train_complete emit complete_dag_check.json (and classify not_directed vs not_acyclic)
                     dag_check=dag_check,
+                    dag_project_on_cycle=dag_project_on_cycle,
                 )
                 if result:
                     all_results[dataset_name][int(seed)] = result
