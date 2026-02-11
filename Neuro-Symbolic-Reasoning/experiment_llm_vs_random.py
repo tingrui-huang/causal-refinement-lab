@@ -50,7 +50,9 @@ def run_experiment_for_dataset(dataset_name: str,
                                run_id: Optional[str] = None,
                                vstructure_in_mask: bool = False,
                                dag_check: bool = False,
-                               dag_project_on_cycle: bool = False):
+                               dag_project_on_cycle: bool = False,
+                               tie_blocks: bool = False,
+                               tie_method: str = "mean"):
     """
     Run LLM vs Random experiment for a specific dataset
     
@@ -67,6 +69,8 @@ def run_experiment_for_dataset(dataset_name: str,
         vstructure_in_mask: If True, enforce inferred v-structure constraints directly on the skeleton mask during training.
         dag_check: If True, run DAG check (directedness + acyclicity) after training and save complete_dag_check.json.
         dag_project_on_cycle: If True, when cyclic, cut weakest edge(s) on cycles until acyclic; saves complete_*_dag artifacts.
+        tie_blocks: If True, tie all state-to-state weights within each variable-pair block (ablation: remove state-level DoF).
+        tie_method: Aggregation method used to tie a block ("mean" or "max").
     """
     print("\n" + "=" * 80)
     print(f"EXPERIMENT: {dataset_name.upper()} DATASET")
@@ -230,9 +234,8 @@ def run_experiment_for_dataset(dataset_name: str,
     elif dataset_name == 'insurance':
         lambda_group = 0.01
         lambda_cycle = 0.001
-        edge_threshold = 0.05
+        edge_threshold = 0.1
     else:
-        # Default values
         lambda_group = 0.01
         lambda_cycle = 0.001
         edge_threshold = 0.1
@@ -255,6 +258,9 @@ def run_experiment_for_dataset(dataset_name: str,
         'random_seed': random_seed,    # For reproducibility (training + random prior)
         'dag_check': bool(dag_check),
         'dag_project_on_cycle': bool(dag_project_on_cycle),
+        # Ablation knobs (passed through to CausalDiscoveryModel via train_complete)
+        'tie_blocks': bool(tie_blocks),
+        'tie_method': str(tie_method),
     }
 
     # ============================================================================
@@ -409,7 +415,8 @@ def run_experiment_for_dataset(dataset_name: str,
                            results_random['metrics']['orientation_accuracy']
     
         if unresolved_diff < 0.1 and orientation_diff > 0.2:
-            print("\n[✓] LLM is an 'INTELLIGENT GUIDE'")
+            # NOTE: Avoid non-ASCII symbols (e.g., ✓/✗/→) to prevent Windows GBK console encoding errors.
+            print("\n[OK] LLM is an 'INTELLIGENT GUIDE'")
             print("   Both break symmetry (low unresolved ratio), but LLM guides")
             print("   in the correct direction (high orientation accuracy).")
             print(f"\n   Evidence:")
@@ -464,7 +471,7 @@ def run_experiment_for_dataset(dataset_name: str,
             
             f.write("Conclusion:\n")
             if unresolved_diff < 0.1 and orientation_diff > 0.2:
-                f.write("  [✓] LLM is an 'INTELLIGENT GUIDE'\n")
+                f.write("  [OK] LLM is an 'INTELLIGENT GUIDE'\n")
                 f.write("  LLM provides meaningful directional guidance beyond just breaking symmetry.\n")
             elif unresolved_diff < 0.1 and orientation_diff < 0.1:
                 f.write("  [!] LLM is a 'BLIND PERTURBATION'\n")
@@ -577,6 +584,24 @@ def main():
                     help="Optional PAG CSV path (must include edge_type) for v-structure inference. Defaults to pure skeleton path if available.")
     ap.add_argument("--run_id", type=str, default=None,
                     help="Optional run id for output folder naming. If omitted, a timestamp is used.")
+    tie_group = ap.add_mutually_exclusive_group()
+    tie_group.add_argument(
+        "--tie_blocks",
+        action="store_true",
+        help="Enable block-tied ablation: within each variable-pair block, tie all allowed state-to-state weights to one scalar.",
+    )
+    tie_group.add_argument(
+        "--no_tie_blocks",
+        action="store_true",
+        help="Disable block-tied ablation (default behavior).",
+    )
+    ap.add_argument(
+        "--tie_method",
+        type=str,
+        default=None,
+        choices=["mean", "max"],
+        help="Block tying aggregation method: mean | max. If omitted, uses the defaults below.",
+    )
     vmask_group = ap.add_mutually_exclusive_group()
     vmask_group.add_argument(
         "--vstructure_in_mask",
@@ -633,7 +658,7 @@ def main():
     # 'both'   - 运行 LLM 和 Random 两个实验（完整对比）
     # 'llm'    - 只运行 LLM Prior 实验
     # 'random' - 只运行 Random Prior 实验
-    run_mode = ('llm')  # ← 改这里！(or use CLI: --run_mode ...)
+    run_mode = ('random')  # ← 改这里！(or use CLI: --run_mode ...)
 
     # Random seeds: can be a single int or a list of ints
     # Example:
@@ -658,6 +683,9 @@ def main():
     dag_check = True
     # If cyclic, optionally project to DAG by cutting weakest edge(s) on cycles.
     dag_project_on_cycle = True
+    # Ablation: block-tied adjacency (removes state-level degrees of freedom while staying in one-hot space)
+    tie_blocks = False
+    tie_method = "mean"
     # ← 改这里！(推荐: sachs=300, alarm=1000, andes=1500,hailfinder=1000 )
     # ============================================================================
 
@@ -680,6 +708,12 @@ def main():
         vstructure_fci_csv_path = str(args.vstructure_fci_csv)
     if args.run_id is not None:
         run_id = str(args.run_id)
+    if args.tie_blocks:
+        tie_blocks = True
+    if args.no_tie_blocks:
+        tie_blocks = False
+    if args.tie_method is not None:
+        tie_method = str(args.tie_method)
     # CLI override (optional): otherwise keep the default configured above.
     if args.vstructure_in_mask:
         vstructure_in_mask = True
@@ -721,6 +755,8 @@ def main():
                     # Make train_complete emit complete_dag_check.json (and classify not_directed vs not_acyclic)
                     dag_check=dag_check,
                     dag_project_on_cycle=dag_project_on_cycle,
+                    tie_blocks=tie_blocks,
+                    tie_method=tie_method,
                 )
                 if result:
                     all_results[dataset_name][int(seed)] = result
@@ -750,11 +786,11 @@ def main():
                     print(f"    LLM Orient Acc:   {result['llm']['metrics']['orientation_accuracy']*100:5.1f}%")
                     print(f"    Random Orient Acc:{result['random']['metrics']['orientation_accuracy']*100:5.1f}%")
                     if result['orientation_diff'] > 0.2:
-                        print("    → LLM is INTELLIGENT GUIDE ✓")
+                        print("    -> LLM is INTELLIGENT GUIDE [OK]")
                     elif result['orientation_diff'] < 0.1:
-                        print("    → LLM is BLIND PERTURBATION ✗")
+                        print("    -> LLM is BLIND PERTURBATION [FAIL]")
                     else:
-                        print("    → MIXED RESULTS ?")
+                        print("    -> MIXED RESULTS ?")
                 elif result.get("llm"):
                     print(f"  seed_{seed}: LLM-only run completed")
                 elif result.get("random"):

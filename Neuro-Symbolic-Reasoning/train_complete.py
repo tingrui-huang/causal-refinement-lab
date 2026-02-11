@@ -111,7 +111,10 @@ def train_complete(config: dict):
     model = CausalDiscoveryModel(
         n_states=var_structure['n_states'],
         skeleton_mask=priors['skeleton_mask'],
-        direction_prior=priors['direction_prior']
+        direction_prior=priors['direction_prior'],
+        blocks=priors.get('blocks'),
+        tie_blocks=bool(config.get('tie_blocks', False)),
+        tie_method=str(config.get('tie_method', 'mean')),
     )
     
     # === 4. INITIALIZE LOSS COMPUTER ===
@@ -141,7 +144,6 @@ def train_complete(config: dict):
     fci_baseline_unresolved_ratio = None
     if config.get('fci_skeleton_path'):
         try:
-            import sys
             import pandas as pd
             sys.path.insert(0, str(Path(__file__).parent.parent / 'refactored'))
             from evaluate_fci import parse_fci_csv
