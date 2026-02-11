@@ -11,7 +11,7 @@ CRITICAL CHANGE from previous version:
 
 import torch
 import torch.nn as nn
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 
 class CausalDiscoveryModel(nn.Module):
@@ -28,10 +28,16 @@ class CausalDiscoveryModel(nn.Module):
     - NEW: self.raw_adj = Parameter(matrix of size 105x105)
     """
     
-    def __init__(self, 
-                 n_states: int,
-                 skeleton_mask: torch.Tensor,
-                 direction_prior: torch.Tensor):
+    def __init__(
+        self,
+        n_states: int,
+        skeleton_mask: torch.Tensor,
+        direction_prior: torch.Tensor,
+        *,
+        blocks: Optional[List[Dict]] = None,
+        tie_blocks: bool = False,
+        tie_method: str = "mean",
+    ):
         """
         Args:
             n_states: Number of states (105)
@@ -41,6 +47,9 @@ class CausalDiscoveryModel(nn.Module):
         super().__init__()
         
         self.n_states = n_states
+        self.blocks: List[Dict] = list(blocks) if blocks is not None else []
+        self.tie_blocks = bool(tie_blocks)
+        self.tie_method = str(tie_method)
         
         # CRITICAL: Dense learnable matrix (not sparse rule list!)
         # Initialize from direction_prior using logit
@@ -58,7 +67,45 @@ class CausalDiscoveryModel(nn.Module):
         print(f"Parameter matrix: {self.raw_adj.shape}")
         print(f"Total parameters: {self.raw_adj.numel()}")
         print(f"Skeleton constraint: {int(skeleton_mask.sum().item())} / {skeleton_mask.numel()} allowed")
+        if self.tie_blocks:
+            print(f"[ABLATION] Block-tied adjacency enabled (tie_method={self.tie_method}, blocks={len(self.blocks)})")
     
+    def _apply_block_tying(self, adjacency: torch.Tensor) -> torch.Tensor:
+        """
+        Ablation: tie all state-to-state weights within each variable-pair block.
+
+        This removes state-specific degrees of freedom while keeping the same one-hot state space.
+        Only allowed entries (per skeleton_mask) are tied; forbidden entries remain 0.
+        """
+        if (not self.tie_blocks) or (not self.blocks):
+            return adjacency
+
+        # Work on a copy to keep autograd behavior clean & avoid in-place on views.
+        adj = adjacency.clone()
+
+        for b in self.blocks:
+            row_idx = torch.as_tensor(b["row_indices"], device=adj.device, dtype=torch.long)
+            col_idx = torch.as_tensor(b["col_indices"], device=adj.device, dtype=torch.long)
+
+            block = adj[row_idx[:, None], col_idx[None, :]]
+            mask = self.skeleton_mask[row_idx[:, None], col_idx[None, :]]
+
+            denom = mask.sum()
+            if denom.item() <= 0:
+                continue
+
+            if self.tie_method == "mean":
+                v = (block * mask).sum() / denom
+            elif self.tie_method == "max":
+                # Max over allowed entries only.
+                v = block[mask.bool()].max()
+            else:
+                raise ValueError(f"Unknown tie_method: {self.tie_method}")
+
+            adj[row_idx[:, None], col_idx[None, :]] = v * mask
+
+        return adj
+
     def get_adjacency(self) -> torch.Tensor:
         """
         Get current adjacency matrix
@@ -75,7 +122,10 @@ class CausalDiscoveryModel(nn.Module):
         
         # Apply skeleton mask: zero out forbidden connections
         adjacency = weights * self.skeleton_mask
-        
+
+        # Optional ablation: tie each variable-pair block to a single scalar.
+        adjacency = self._apply_block_tying(adjacency)
+
         return adjacency
     
     def forward(self, observations: torch.Tensor, n_hops: int = 1) -> torch.Tensor:

@@ -29,9 +29,14 @@ from pathlib import Path
 from typing import Dict, List, Optional, Union
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import torch
+
 # Import config to get dataset paths
 import config
 from train_complete import train_complete
+
+# Optional postprocess: v-structure hard mask (scheme A)
+from modules.vstructure_postprocess import postprocess_vstructure_on_run_dir
 
 
 def run_experiment_for_dataset(dataset_name: str, 
@@ -39,7 +44,15 @@ def run_experiment_for_dataset(dataset_name: str,
                                low_conf: float = 0.4,
                                n_epochs: int = 200,
                                run_mode: str = 'both',
-                               random_seed: Optional[int] = None):
+                               random_seed: Optional[int] = None,
+                               vstructure_postprocess: bool = False,
+                               vstructure_fci_csv_path: Optional[str] = None,
+                               run_id: Optional[str] = None,
+                               vstructure_in_mask: bool = False,
+                               dag_check: bool = False,
+                               dag_project_on_cycle: bool = False,
+                               tie_blocks: bool = False,
+                               tie_method: str = "mean"):
     """
     Run LLM vs Random experiment for a specific dataset
     
@@ -50,6 +63,14 @@ def run_experiment_for_dataset(dataset_name: str,
         n_epochs: Number of training epochs
         run_mode: 'both' | 'llm' | 'random'
         random_seed: Random seed for reproducibility (training + random prior)
+        vstructure_postprocess: Whether to apply v-structure hard mask after training (scheme A)
+        vstructure_fci_csv_path: Optional PAG CSV path (must include edge_type). If None, uses pure skeleton path.
+        run_id: Optional run identifier used for output folder naming. If None, uses a timestamp.
+        vstructure_in_mask: If True, enforce inferred v-structure constraints directly on the skeleton mask during training.
+        dag_check: If True, run DAG check (directedness + acyclicity) after training and save complete_dag_check.json.
+        dag_project_on_cycle: If True, when cyclic, cut weakest edge(s) on cycles until acyclic; saves complete_*_dag artifacts.
+        tie_blocks: If True, tie all state-to-state weights within each variable-pair block (ablation: remove state-level DoF).
+        tie_method: Aggregation method used to tie a block ("mean" or "max").
     """
     print("\n" + "=" * 80)
     print(f"EXPERIMENT: {dataset_name.upper()} DATASET")
@@ -61,6 +82,11 @@ def run_experiment_for_dataset(dataset_name: str,
     if random_seed is None:
         random_seed = config.RANDOM_SEED
     random_seed = int(random_seed)
+
+    # Output run id (timestamp by default) to avoid overwriting prior runs.
+    if run_id is None:
+        run_id = time.strftime("%Y%m%d_%H%M%S")
+    run_id = str(run_id)
     
     # Get dataset configuration
     dataset_config = config.DATASET_CONFIGS[dataset_name]
@@ -106,11 +132,28 @@ def run_experiment_for_dataset(dataset_name: str,
             try:
                 metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
                 history = json.loads(history_path.read_text(encoding="utf-8"))
+                # Optional cached v-structure postprocess results
+                v_metrics_path = out / "complete_metrics_vstructure.json"
+                v_stats_path = out / "complete_vstructure_stats.json"
+                v_metrics = None
+                v_stats = None
+                if v_metrics_path.exists():
+                    try:
+                        v_metrics = json.loads(v_metrics_path.read_text(encoding="utf-8"))
+                    except Exception:
+                        v_metrics = None
+                if v_stats_path.exists():
+                    try:
+                        v_stats = json.loads(v_stats_path.read_text(encoding="utf-8"))
+                    except Exception:
+                        v_stats = None
                 return {
                     "metrics": metrics,
                     "history": history,
                     "model": None,  # not needed for evaluation reporting here
                     "fci_baseline_unresolved_ratio": None,
+                    "vstructure_metrics": v_metrics,
+                    "vstructure_stats": v_stats,
                     "cached": True,
                     "output_dir": str(out),
                 }
@@ -118,6 +161,22 @@ def run_experiment_for_dataset(dataset_name: str,
                 print(f"[WARN] Failed to load cached results from {out}: {e}")
                 return None
         return None
+
+    def _maybe_run_vstructure_postprocess(*, out_dir: Union[str, Path], pag_csv_path: Optional[str], edge_threshold_val: float) -> Optional[Dict]:
+        if not vstructure_postprocess:
+            return None
+        if not pag_csv_path:
+            return None
+        return postprocess_vstructure_on_run_dir(
+            run_dir=str(out_dir),
+            data_path=str(dataset_config["data_path"]),
+            metadata_path=str(dataset_config["metadata_path"]),
+            ground_truth_path=str(dataset_config["ground_truth_path"]),
+            ground_truth_type=str(dataset_config.get("ground_truth_type", "bif")),
+            pag_csv_path=str(pag_csv_path),
+            edge_threshold=float(edge_threshold_val),
+            force=False,
+        )
 
     requested_mode = run_mode
     effective_mode = run_mode
@@ -151,19 +210,19 @@ def run_experiment_for_dataset(dataset_name: str,
     if dataset_name == 'sachs':
         lambda_group = 0.01
         lambda_cycle = 0.001
-        edge_threshold = 0.08
+        edge_threshold = 0.1
     elif dataset_name == 'alarm':
         lambda_group = 0.01
         lambda_cycle = 0.001
-        edge_threshold = 0.08
+        edge_threshold = 0.1
     elif dataset_name == 'andes':
-        lambda_group = 0.05
-        lambda_cycle = 0.05
-        edge_threshold = 0.08
+        lambda_group = 0.01
+        lambda_cycle = 0.005
+        edge_threshold = 0.1
     elif dataset_name == 'child':
         lambda_group = 0.005
         lambda_cycle = 0.001
-        edge_threshold = 0.08
+        edge_threshold = 0.1
     elif dataset_name == 'hailfinder':
         lambda_group = 0.01
         lambda_cycle = 0.001
@@ -175,9 +234,8 @@ def run_experiment_for_dataset(dataset_name: str,
     elif dataset_name == 'insurance':
         lambda_group = 0.01
         lambda_cycle = 0.001
-        edge_threshold = 0.08
+        edge_threshold = 0.1
     else:
-        # Default values
         lambda_group = 0.01
         lambda_cycle = 0.001
         edge_threshold = 0.1
@@ -198,6 +256,11 @@ def run_experiment_for_dataset(dataset_name: str,
         'high_confidence': high_conf,  # Pass to prior builder
         'low_confidence': low_conf,    # Pass to prior builder
         'random_seed': random_seed,    # For reproducibility (training + random prior)
+        'dag_check': bool(dag_check),
+        'dag_project_on_cycle': bool(dag_project_on_cycle),
+        # Ablation knobs (passed through to CausalDiscoveryModel via train_complete)
+        'tie_blocks': bool(tie_blocks),
+        'tie_method': str(tie_method),
     }
 
     # ============================================================================
@@ -214,11 +277,17 @@ def run_experiment_for_dataset(dataset_name: str,
 
         config_llm = base_config.copy()
         config_llm.update({
-            'fci_skeleton_path': str(llm_skeleton_path),      # Use FCI+LLM skeleton (LLM-filtered edges)
-            'llm_direction_path': str(llm_skeleton_path),     # Same file for direction
+            # IMPORTANT: For fair comparison, hard skeleton must come from PURE FCI/RFCI (no LLM).
+            # The only difference vs random should be the *direction prior* initialization.
+            'fci_skeleton_path': str(pure_skeleton_path),
+            'llm_direction_path': str(llm_skeleton_path),     # LLM CSV used ONLY for soft direction prior
             'use_llm_prior': True,
             'use_random_prior': False,
-            'output_dir': f'results/experiment_llm_vs_random/{dataset_name}/seed_{random_seed}/llm_prior'
+            # Optional: training-time v-structure hard mask (must be identical across LLM vs Random runs)
+            'enforce_vstructure_mask': bool(vstructure_in_mask),
+            'vstructure_pag_csv_path': str(vstructure_fci_csv_path) if vstructure_fci_csv_path else str(pure_skeleton_path),
+            'output_dir': f'results/experiment_llm_vs_random/{dataset_name}/seed_{random_seed}/{run_id}/llm_prior',
+            'run_id': run_id,
         })
 
         cached = _try_load_cached_training(config_llm["output_dir"])
@@ -227,6 +296,13 @@ def run_experiment_for_dataset(dataset_name: str,
             results_llm = cached
         else:
             results_llm = train_complete(config_llm)
+        # Optional: v-structure postprocess (scheme A)
+        # Prefer pure FCI/RFCI PAG (non-LLM) if available; otherwise fall back to llm_skeleton_path.
+        pag_csv_for_v = vstructure_fci_csv_path or pure_skeleton_path or llm_skeleton_path
+        vout = _maybe_run_vstructure_postprocess(out_dir=config_llm["output_dir"], pag_csv_path=pag_csv_for_v, edge_threshold_val=config_llm["edge_threshold"])
+        if vout is not None:
+            results_llm["vstructure_metrics"] = vout["metrics"]
+            results_llm["vstructure_stats"] = vout["stats"]
 
     if effective_mode in ['both', 'random']:
         # Experiment 2: Random Prior (Control)
@@ -240,7 +316,11 @@ def run_experiment_for_dataset(dataset_name: str,
             'llm_direction_path': None,                        # Not used for random prior
             'use_llm_prior': False,
             'use_random_prior': True,
-            'output_dir': f'results/experiment_llm_vs_random/{dataset_name}/seed_{random_seed}/random_prior'
+            'enforce_vstructure_mask': bool(vstructure_in_mask),
+            # If caller provided a PAG CSV path use it; otherwise default to pure skeleton path.
+            'vstructure_pag_csv_path': str(vstructure_fci_csv_path) if vstructure_fci_csv_path else str(pure_skeleton_path),
+            'output_dir': f'results/experiment_llm_vs_random/{dataset_name}/seed_{random_seed}/{run_id}/random_prior',
+            'run_id': run_id,
         })
         
         cached = _try_load_cached_training(config_random["output_dir"])
@@ -249,6 +329,12 @@ def run_experiment_for_dataset(dataset_name: str,
             results_random = cached
         else:
             results_random = train_complete(config_random)
+        # Optional: v-structure postprocess (scheme A)
+        pag_csv_for_v = vstructure_fci_csv_path or pure_skeleton_path
+        vout = _maybe_run_vstructure_postprocess(out_dir=config_random["output_dir"], pag_csv_path=pag_csv_for_v, edge_threshold_val=config_random["edge_threshold"])
+        if vout is not None:
+            results_random["vstructure_metrics"] = vout["metrics"]
+            results_random["vstructure_stats"] = vout["stats"]
     
     # ============================================================================
     # Comparison (only if both experiments were run)
@@ -267,6 +353,16 @@ def run_experiment_for_dataset(dataset_name: str,
         print(f"  LLM Prior:    {results_llm['metrics']['orientation_accuracy']*100:5.1f}%")
         print(f"  Random Prior: {results_random['metrics']['orientation_accuracy']*100:5.1f}%")
         print(f"  Difference:   {(results_llm['metrics']['orientation_accuracy'] - results_random['metrics']['orientation_accuracy'])*100:+5.1f}%")
+
+        # Optional: postprocess comparison
+        if results_llm.get("vstructure_metrics") and results_random.get("vstructure_metrics"):
+            llm_vm = results_llm["vstructure_metrics"]
+            rnd_vm = results_random["vstructure_metrics"]
+            print("\n[V-Structure Postprocess] (Scheme A)")
+            print(f"  LLM OA:       {llm_vm.get('orientation_accuracy', 0)*100:5.1f}%")
+            print(f"  Random OA:    {rnd_vm.get('orientation_accuracy', 0)*100:5.1f}%")
+            print(f"  LLM full SHD: {llm_vm.get('full_shd', llm_vm.get('shd'))}")
+            print(f"  Rnd full SHD: {rnd_vm.get('full_shd', rnd_vm.get('shd'))}")
         
         print("\n[Edge Metrics]:")
         print(f"  Edge F1:")
@@ -283,6 +379,11 @@ def run_experiment_for_dataset(dataset_name: str,
         print(f"Edge F1:              {results_llm['metrics']['edge_f1']*100:5.1f}%")
         print(f"Directed F1:          {results_llm['metrics']['directed_f1']*100:5.1f}%")
         print(f"Unresolved Ratio:     {results_llm['history']['unresolved_ratio'][-1]*100:5.1f}%")
+        if results_llm.get("vstructure_metrics"):
+            m = results_llm["vstructure_metrics"]
+            print("\n[V-Structure Postprocess] (Scheme A)")
+            print(f"  OA:                 {m.get('orientation_accuracy', 0)*100:5.1f}%")
+            print(f"  Full SHD:           {m.get('full_shd', m.get('shd'))}")
     elif results_random:
         print("\n" + "=" * 80)
         print(f"RESULTS - {dataset_name.upper()} - RANDOM PRIOR ONLY")
@@ -291,6 +392,11 @@ def run_experiment_for_dataset(dataset_name: str,
         print(f"Edge F1:              {results_random['metrics']['edge_f1']*100:5.1f}%")
         print(f"Directed F1:          {results_random['metrics']['directed_f1']*100:5.1f}%")
         print(f"Unresolved Ratio:     {results_random['history']['unresolved_ratio'][-1]*100:5.1f}%")
+        if results_random.get("vstructure_metrics"):
+            m = results_random["vstructure_metrics"]
+            print("\n[V-Structure Postprocess] (Scheme A)")
+            print(f"  OA:                 {m.get('orientation_accuracy', 0)*100:5.1f}%")
+            print(f"  Full SHD:           {m.get('full_shd', m.get('shd'))}")
     
     # ============================================================================
     # Conclusion (only if both experiments were run)
@@ -309,7 +415,8 @@ def run_experiment_for_dataset(dataset_name: str,
                            results_random['metrics']['orientation_accuracy']
     
         if unresolved_diff < 0.1 and orientation_diff > 0.2:
-            print("\n[✓] LLM is an 'INTELLIGENT GUIDE'")
+            # NOTE: Avoid non-ASCII symbols (e.g., ✓/✗/→) to prevent Windows GBK console encoding errors.
+            print("\n[OK] LLM is an 'INTELLIGENT GUIDE'")
             print("   Both break symmetry (low unresolved ratio), but LLM guides")
             print("   in the correct direction (high orientation accuracy).")
             print(f"\n   Evidence:")
@@ -329,7 +436,7 @@ def run_experiment_for_dataset(dataset_name: str,
     # Save comparison report (only if both experiments were run)
     # ============================================================================
     if results_llm and results_random:
-        output_dir = Path(f'results/experiment_llm_vs_random/{dataset_name}/seed_{random_seed}')
+        output_dir = Path(f"results/experiment_llm_vs_random/{dataset_name}/seed_{random_seed}/{run_id}")
         output_dir.mkdir(exist_ok=True, parents=True)
         
         with open(output_dir / 'comparison_report.txt', 'w', encoding='utf-8') as f:
@@ -364,7 +471,7 @@ def run_experiment_for_dataset(dataset_name: str,
             
             f.write("Conclusion:\n")
             if unresolved_diff < 0.1 and orientation_diff > 0.2:
-                f.write("  [✓] LLM is an 'INTELLIGENT GUIDE'\n")
+                f.write("  [OK] LLM is an 'INTELLIGENT GUIDE'\n")
                 f.write("  LLM provides meaningful directional guidance beyond just breaking symmetry.\n")
             elif unresolved_diff < 0.1 and orientation_diff < 0.1:
                 f.write("  [!] LLM is a 'BLIND PERTURBATION'\n")
@@ -378,7 +485,7 @@ def run_experiment_for_dataset(dataset_name: str,
     # ============================================================================
     # Save run report (ALWAYS, even for random-only)
     # ============================================================================
-    seed_dir = Path(f"results/experiment_llm_vs_random/{dataset_name}/seed_{random_seed}")
+    seed_dir = Path(f"results/experiment_llm_vs_random/{dataset_name}/seed_{random_seed}/{run_id}")
     seed_dir.mkdir(exist_ok=True, parents=True)
     report_path = seed_dir / "run_report.txt"
 
@@ -391,6 +498,7 @@ def run_experiment_for_dataset(dataset_name: str,
     with open(report_path, "w", encoding="utf-8") as f:
         f.write(f"dataset={dataset_name}\n")
         f.write(f"seed={random_seed}\n")
+        f.write(f"run_id={run_id}\n")
         f.write(f"requested_mode={requested_mode}\n")
         f.write(f"effective_mode={effective_mode}\n")
         f.write(f"skeleton_path={pure_skeleton_path}\n")
@@ -470,6 +578,63 @@ def main():
                     help="High confidence prior weight. If omitted, uses the defaults below.")
     ap.add_argument("--low_conf", type=float, default=None,
                     help="Low confidence prior weight. If omitted, uses the defaults below.")
+    ap.add_argument("--vstructure_postprocess", action="store_true",
+                    help="If set, apply v-structure hard mask postprocess after training (scheme A).")
+    ap.add_argument("--vstructure_fci_csv", type=str, default=None,
+                    help="Optional PAG CSV path (must include edge_type) for v-structure inference. Defaults to pure skeleton path if available.")
+    ap.add_argument("--run_id", type=str, default=None,
+                    help="Optional run id for output folder naming. If omitted, a timestamp is used.")
+    tie_group = ap.add_mutually_exclusive_group()
+    tie_group.add_argument(
+        "--tie_blocks",
+        action="store_true",
+        help="Enable block-tied ablation: within each variable-pair block, tie all allowed state-to-state weights to one scalar.",
+    )
+    tie_group.add_argument(
+        "--no_tie_blocks",
+        action="store_true",
+        help="Disable block-tied ablation (default behavior).",
+    )
+    ap.add_argument(
+        "--tie_method",
+        type=str,
+        default=None,
+        choices=["mean", "max"],
+        help="Block tying aggregation method: mean | max. If omitted, uses the defaults below.",
+    )
+    vmask_group = ap.add_mutually_exclusive_group()
+    vmask_group.add_argument(
+        "--vstructure_in_mask",
+        action="store_true",
+        help="Override: enable training-time v-structure hard mask (in-skeleton). If omitted, uses the defaults below.",
+    )
+    vmask_group.add_argument(
+        "--no_vstructure_in_mask",
+        action="store_true",
+        help="Override: disable training-time v-structure hard mask (in-skeleton). If omitted, uses the defaults below.",
+    )
+    dag_group = ap.add_mutually_exclusive_group()
+    dag_group.add_argument(
+        "--dag_check",
+        action="store_true",
+        help="Override: enable DAG check (directedness + acyclicity) after training. If omitted, uses the defaults below.",
+    )
+    dag_group.add_argument(
+        "--no_dag_check",
+        action="store_true",
+        help="Override: disable DAG check. If omitted, uses the defaults below.",
+    )
+    proj_group = ap.add_mutually_exclusive_group()
+    proj_group.add_argument(
+        "--dag_project_on_cycle",
+        action="store_true",
+        help="Override: if a directed cycle exists, cut weakest edge(s) on cycles until acyclic; saves complete_*_dag artifacts. If omitted, uses defaults below.",
+    )
+    proj_group.add_argument(
+        "--no_dag_project_on_cycle",
+        action="store_true",
+        help="Override: disable DAG projection-on-cycle. If omitted, uses defaults below.",
+    )
     args = ap.parse_args()
     
     # ============================================================================
@@ -487,13 +652,13 @@ def main():
     #   datasets = ['alarm', 'sachs', 'andes']  # 跑三个
     #
     # 可选数据集：'alarm', 'sachs', 'andes', 'child', 'hailfinder', 'insurance', 'win95pts'
-    datasets = ['pigs']  # ← 改这里！(or use CLI: --datasets ...)
+    datasets = ['insurance']  # ← 改这里！(or use CLI: --datasets ...)
     
     # 选择要运行的实验类型
     # 'both'   - 运行 LLM 和 Random 两个实验（完整对比）
     # 'llm'    - 只运行 LLM Prior 实验
     # 'random' - 只运行 Random Prior 实验
-    run_mode = 'random'  # ← 改这里！(or use CLI: --run_mode ...)
+    run_mode = ('random')  # ← 改这里！(or use CLI: --run_mode ...)
 
     # Random seeds: can be a single int or a list of ints
     # Example:
@@ -506,7 +671,21 @@ def main():
     low_confidence = 0.1   # 弱方向的权重（0.0-0.5）
     
     # 训练轮数
-    n_epochs = 500
+    n_epochs = 140  # Optional postprocess
+    use_vstructure_postprocess = False
+    vstructure_fci_csv_path = None
+    run_id = None
+    # Training-time v-structure hard mask (in-skeleton).
+    # True  = enforce inferred colliders directly in the skeleton mask during training.
+    # False = do not enforce (baseline).
+    vstructure_in_mask = True
+    # DAG check (post-training): saves complete_dag_check.json in each run dir.
+    dag_check = True
+    # If cyclic, optionally project to DAG by cutting weakest edge(s) on cycles.
+    dag_project_on_cycle = True
+    # Ablation: block-tied adjacency (removes state-level degrees of freedom while staying in one-hot space)
+    tie_blocks = False
+    tie_method = "mean"
     # ← 改这里！(推荐: sachs=300, alarm=1000, andes=1500,hailfinder=1000 )
     # ============================================================================
 
@@ -523,6 +702,31 @@ def main():
         high_confidence = float(args.high_conf)
     if args.low_conf is not None:
         low_confidence = float(args.low_conf)
+    if args.vstructure_postprocess:
+        use_vstructure_postprocess = True
+    if args.vstructure_fci_csv is not None:
+        vstructure_fci_csv_path = str(args.vstructure_fci_csv)
+    if args.run_id is not None:
+        run_id = str(args.run_id)
+    if args.tie_blocks:
+        tie_blocks = True
+    if args.no_tie_blocks:
+        tie_blocks = False
+    if args.tie_method is not None:
+        tie_method = str(args.tie_method)
+    # CLI override (optional): otherwise keep the default configured above.
+    if args.vstructure_in_mask:
+        vstructure_in_mask = True
+    if args.no_vstructure_in_mask:
+        vstructure_in_mask = False
+    if args.dag_check:
+        dag_check = True
+    if args.no_dag_check:
+        dag_check = False
+    if args.dag_project_on_cycle:
+        dag_project_on_cycle = True
+    if args.no_dag_project_on_cycle:
+        dag_project_on_cycle = False
 
     # Normalize seeds to list[int]
     if isinstance(seeds, int):
@@ -544,6 +748,15 @@ def main():
                     n_epochs=n_epochs,
                     run_mode=run_mode,
                     random_seed=seed,
+                    vstructure_postprocess=use_vstructure_postprocess,
+                    vstructure_fci_csv_path=vstructure_fci_csv_path,
+                    run_id=run_id,
+                    vstructure_in_mask=vstructure_in_mask,
+                    # Make train_complete emit complete_dag_check.json (and classify not_directed vs not_acyclic)
+                    dag_check=dag_check,
+                    dag_project_on_cycle=dag_project_on_cycle,
+                    tie_blocks=tie_blocks,
+                    tie_method=tie_method,
                 )
                 if result:
                     all_results[dataset_name][int(seed)] = result
@@ -573,11 +786,11 @@ def main():
                     print(f"    LLM Orient Acc:   {result['llm']['metrics']['orientation_accuracy']*100:5.1f}%")
                     print(f"    Random Orient Acc:{result['random']['metrics']['orientation_accuracy']*100:5.1f}%")
                     if result['orientation_diff'] > 0.2:
-                        print("    → LLM is INTELLIGENT GUIDE ✓")
+                        print("    -> LLM is INTELLIGENT GUIDE [OK]")
                     elif result['orientation_diff'] < 0.1:
-                        print("    → LLM is BLIND PERTURBATION ✗")
+                        print("    -> LLM is BLIND PERTURBATION [FAIL]")
                     else:
-                        print("    → MIXED RESULTS ?")
+                        print("    -> MIXED RESULTS ?")
                 elif result.get("llm"):
                     print(f"  seed_{seed}: LLM-only run completed")
                 elif result.get("random"):

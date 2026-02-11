@@ -14,6 +14,8 @@ import pandas as pd
 from typing import Dict, List, Tuple, Set, Optional
 from pathlib import Path
 
+from modules.vstructure_postprocess import enforce_vstructure_on_skeleton_mask
+
 
 class PriorBuilder:
     """
@@ -467,7 +469,9 @@ class PriorBuilder:
                       use_llm_prior: bool = True, use_random_prior: bool = False,
                       random_seed: Optional[int] = None,
                       high_confidence: float = 0.7,
-                      low_confidence: float = 0.3) -> Dict[str, torch.Tensor]:
+                      low_confidence: float = 0.3,
+                      enforce_vstructure: bool = False,
+                      vstructure_pag_csv_path: Optional[str] = None) -> Dict[str, torch.Tensor]:
         """
         Convenience method to build all priors at once
 
@@ -488,6 +492,24 @@ class PriorBuilder:
         """
         # Build skeleton from PURE FCI (hard constraint)
         skeleton_mask = self.build_skeleton_mask_from_fci(fci_skeleton_path)
+
+        # Optional: enforce collider (v-structure) constraints directly on skeleton mask (training-time hard mask).
+        if enforce_vstructure:
+            pag_path = vstructure_pag_csv_path or fci_skeleton_path
+            try:
+                skeleton_mask, vstats = enforce_vstructure_on_skeleton_mask(
+                    skeleton_mask=skeleton_mask,
+                    var_structure=self.var_structure,
+                    pag_csv_path=str(pag_path),
+                )
+                print("\n" + "=" * 70)
+                print("APPLIED V-STRUCTURE HARD MASK (TRAINING-TIME)")
+                print("=" * 70)
+                print(f"PAG CSV: {pag_path}")
+                print(f"Forced edges inferred: {vstats.forced_edges_total} (total) / {vstats.forced_edges_in_structure} (in-structure)")
+                print(f"Skeleton reverse-blocks forbidden: {vstats.skeleton_blocks_forbidden}")
+            except Exception as e:
+                print(f"[WARN] Failed to enforce v-structure mask on skeleton: {e}")
 
         # Build direction prior
         if use_random_prior:

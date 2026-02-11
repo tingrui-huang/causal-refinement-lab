@@ -26,6 +26,12 @@ from modules.model import CausalDiscoveryModel
 from modules.loss import LossComputer
 from modules.evaluator import CausalGraphEvaluator
 from modules.metrics import compute_unresolved_ratio, compute_sparsity_metrics
+from modules.dag_check import (
+    find_one_cycle,
+    is_dag_kahn,
+    cycle_to_string,
+    project_to_dag_cut_weakest_in_cycle,
+)
 
 
 def train_complete(config: dict):
@@ -95,7 +101,9 @@ def train_complete(config: dict):
         use_random_prior=config.get('use_random_prior', False),  # Whether to use random prior (control experiment)
         random_seed=config.get('random_seed'),  # Random seed for reproducibility (recommended)
         high_confidence=config.get('high_confidence', 0.7),  # High confidence weight (customizable)
-        low_confidence=config.get('low_confidence', 0.3)  # Low confidence weight (customizable)
+        low_confidence=config.get('low_confidence', 0.3),  # Low confidence weight (customizable)
+        enforce_vstructure=bool(config.get("enforce_vstructure_mask", False)),
+        vstructure_pag_csv_path=config.get("vstructure_pag_csv_path"),
     )
     
     # === 3. INITIALIZE MODEL ===
@@ -103,7 +111,10 @@ def train_complete(config: dict):
     model = CausalDiscoveryModel(
         n_states=var_structure['n_states'],
         skeleton_mask=priors['skeleton_mask'],
-        direction_prior=priors['direction_prior']
+        direction_prior=priors['direction_prior'],
+        blocks=priors.get('blocks'),
+        tie_blocks=bool(config.get('tie_blocks', False)),
+        tie_method=str(config.get('tie_method', 'mean')),
     )
     
     # === 4. INITIALIZE LOSS COMPUTER ===
@@ -133,7 +144,6 @@ def train_complete(config: dict):
     fci_baseline_unresolved_ratio = None
     if config.get('fci_skeleton_path'):
         try:
-            import sys
             import pandas as pd
             sys.path.insert(0, str(Path(__file__).parent.parent / 'refactored'))
             from evaluate_fci import parse_fci_csv
@@ -307,15 +317,144 @@ def train_complete(config: dict):
     print(f"TRAINING TIME: {training_time:.2f} seconds ({training_time/60:.2f} minutes)")
     print("=" * 70)
     
-    # === FINAL EVALUATION ===
+    # === FINAL GRAPH SELECTION (optional DAG projection) + FINAL EVALUATION ===
     print("\n" + "=" * 70)
-    print("FINAL EVALUATION")
+    print("FINAL GRAPH + EVALUATION")
     print("=" * 70)
     
     adjacency = model.get_adjacency()
-    learned_edges = evaluator.extract_learned_edges(adjacency, threshold=config['edge_threshold'])
-    metrics = evaluator.evaluate(learned_edges)
+    learned_edges_raw = evaluator.extract_learned_edges(adjacency, threshold=config['edge_threshold'])
+    learned_edges = set(learned_edges_raw)
+
+    # Optional: DAG check + optional projection BEFORE evaluation so reported metrics match the final graph.
+    dag_check = None
+    dag_check_raw = None
+    dag_projection = None
+
+    if bool(config.get("dag_check", False)) or bool(config.get("dag_project_on_cycle", False)):
+        try:
+            # Directedness proxy: unresolved_ratio_final (symmetric pairs) > 0 => not fully directed.
+            if history.get("unresolved_ratio"):
+                unresolved_ratio_final = float(history["unresolved_ratio"][-1])
+            else:
+                unresolved_ratio_final = float(
+                    compute_unresolved_ratio(adjacency, priors["blocks"], threshold=config.get("edge_threshold", 0.3)).get(
+                        "unresolved_ratio", 0.0
+                    )
+                )
+
+            nodes = set(var_structure.get("variable_names", []))
+            for u, v in learned_edges:
+                nodes.add(u)
+                nodes.add(v)
+
+            is_dag_raw = bool(is_dag_kahn(nodes, learned_edges))
+            cyc_raw = None if is_dag_raw else find_one_cycle(nodes, learned_edges)
+            dag_check_raw = {
+                "is_dag": is_dag_raw,
+                "unresolved_ratio_final": unresolved_ratio_final,
+                "not_directed": bool(unresolved_ratio_final > 0.0),
+                "not_acyclic": bool(not is_dag_raw),
+                "cycle_example": cycle_to_string(cyc_raw) if cyc_raw else None,
+                "num_nodes": int(len(nodes)),
+                "num_edges": int(len(learned_edges)),
+            }
+
+            # Greedy DAG projection: cut weakest edge(s) on cycles until acyclic.
+            if (not is_dag_raw) and bool(config.get("dag_project_on_cycle", False)):
+                var_to_states = var_structure["var_to_states"]
+
+                def _edge_strength(u: str, v: str) -> float:
+                    idx_u = var_to_states[u]
+                    idx_v = var_to_states[v]
+                    block = adjacency[idx_u][:, idx_v]
+                    return float(block.mean().item())
+
+                dag_edges, proj = project_to_dag_cut_weakest_in_cycle(
+                    edges=set(learned_edges),
+                    edge_strength=_edge_strength,
+                    nodes=set(nodes),
+                )
+                learned_edges = set(dag_edges)
+
+                # Also zero out cut edges in the state-level adjacency so saved adjacency aligns with final edge set.
+                # (We keep the rest of adjacency unchanged.)
+                cuts = list(proj.cuts)
+                for c in cuts:
+                    u, v = c.u, c.v
+                    if u not in var_to_states or v not in var_to_states:
+                        continue
+                    iu = torch.as_tensor(var_to_states[u], dtype=torch.long, device=adjacency.device)
+                    iv = torch.as_tensor(var_to_states[v], dtype=torch.long, device=adjacency.device)
+                    adjacency[iu[:, None], iv[None, :]] = 0.0
+
+                dag_projection = {
+                    "enabled": True,
+                    "is_dag_after": bool(proj.is_dag),
+                    "num_cuts": int(len(proj.cuts)),
+                    "cuts": [
+                        {
+                            "u": c.u,
+                            "v": c.v,
+                            "strength": float(c.strength),
+                            "cycle": c.cycle,
+                        }
+                        for c in proj.cuts
+                    ],
+                    "num_edges_in": int(proj.num_edges_in),
+                    "num_edges_out": int(proj.num_edges_out),
+                }
+
+            # Final DAG check after optional projection
+            is_dag_final = bool(is_dag_kahn(nodes, learned_edges))
+            cyc_final = None if is_dag_final else find_one_cycle(nodes, learned_edges)
+            dag_check = {
+                "is_dag": is_dag_final,
+                "unresolved_ratio_final": unresolved_ratio_final,
+                "not_directed": bool(unresolved_ratio_final > 0.0),
+                "not_acyclic": bool(not is_dag_final),
+                "cycle_example": cycle_to_string(cyc_final) if cyc_final else None,
+                "num_nodes": int(len(nodes)),
+                "num_edges": int(len(learned_edges)),
+            }
+        except Exception as e:
+            print(f"[WARN] DAG check/projection failed: {e}")
+
+    # Now evaluate the FINAL graph (possibly DAG-projected).
+    metrics = evaluator.evaluate(set(learned_edges))
     evaluator.print_metrics(metrics)
+
+    # Write DAG artifacts (raw + final) if enabled
+    try:
+        output_dir = Path(config["output_dir"])
+        output_dir.mkdir(exist_ok=True, parents=True)
+        if dag_check_raw is not None:
+            with open(output_dir / "complete_dag_check_raw.json", "w", encoding="utf-8") as f:
+                json.dump(dag_check_raw, f, indent=2)
+        if dag_check is not None:
+            with open(output_dir / "complete_dag_check.json", "w", encoding="utf-8") as f:
+                json.dump(dag_check, f, indent=2)
+        if dag_projection is not None:
+            with open(output_dir / "complete_dag_projection.json", "w", encoding="utf-8") as f:
+                json.dump(dag_projection, f, indent=2)
+    except Exception:
+        pass
+
+    if dag_check is not None:
+        print("\n" + "-" * 70)
+        print("DAG CHECK (FINAL GRAPH)")
+        print("-" * 70)
+        print(f"is_dag: {dag_check['is_dag']}")
+        if not dag_check["is_dag"]:
+            print(f"reason.not_directed: {dag_check['not_directed']} (unresolved_ratio_final={dag_check['unresolved_ratio_final']:.4f})")
+            print(f"reason.not_acyclic:  {dag_check['not_acyclic']}")
+            if dag_check["cycle_example"]:
+                print(f"cycle_example: {dag_check['cycle_example']}")
+        else:
+            print(f"unresolved_ratio_final={dag_check['unresolved_ratio_final']:.4f}")
+        if dag_projection is not None:
+            print(f"dag_projection.cuts: {dag_projection.get('num_cuts')} | is_dag_after: {dag_projection.get('is_dag_after')}")
+        print("-" * 70)
     
     # === SAVE RESULTS ===
     output_dir = Path(config['output_dir'])
@@ -329,10 +468,10 @@ def train_complete(config: dict):
         'history': history
     }, output_dir / 'complete_model.pt')
     
-    # Save adjacency
+    # Save adjacency (may have cut-edge blocks zeroed if dag_project_on_cycle was enabled)
     torch.save(adjacency, output_dir / 'complete_adjacency.pt')
     
-    # Save learned edges
+    # Save learned edges (FINAL)
     with open(output_dir / 'complete_edges.txt', 'w') as f:
         f.write("Learned Causal Edges (Complete Training)\n")
         f.write("=" * 70 + "\n\n")
@@ -347,10 +486,30 @@ def train_complete(config: dict):
                 block_weights = adjacency[block['row_indices']][:, block['col_indices']]
                 strength = block_weights.mean().item()
                 f.write(f"{var_a} -> {var_b} (strength: {strength:.4f})\n")
+
+    # Save raw learned edges for debugging if projection changed anything
+    if dag_projection is not None:
+        try:
+            with open(output_dir / "complete_edges_raw.txt", "w", encoding="utf-8") as f:
+                f.write("Learned Causal Edges (RAW, before DAG projection)\n")
+                f.write("=" * 70 + "\n\n")
+                for u, v in sorted(learned_edges_raw):
+                    f.write(f"{u} -> {v}\n")
+        except Exception:
+            pass
     
-    # Save metrics
+    # Save metrics (FINAL)
     with open(output_dir / 'complete_metrics.json', 'w') as f:
         json.dump(metrics, f, indent=2)
+
+    # Save raw metrics for debugging if projection changed anything
+    if dag_projection is not None:
+        try:
+            metrics_raw = evaluator.evaluate(set(learned_edges_raw))
+            with open(output_dir / "complete_metrics_raw.json", "w", encoding="utf-8") as f:
+                json.dump(metrics_raw, f, indent=2)
+        except Exception:
+            pass
     
     # Save training history
     with open(output_dir / 'complete_history.json', 'w') as f:
@@ -401,6 +560,16 @@ def train_complete(config: dict):
         f.write(f"  Orientation Accuracy: {metrics['orientation_accuracy']*100:.1f}%\n")
         f.write(f"  Learned Edges: {metrics['learned_edges']}\n")
         f.write(f"  Ground Truth Edges: {metrics['ground_truth_edges']}\n")
+        if dag_check is not None:
+            f.write("\nDAG Check:\n")
+            f.write(f"  is_dag: {dag_check.get('is_dag')}\n")
+            if not dag_check.get("is_dag"):
+                f.write(f"  reason.not_directed: {dag_check.get('not_directed')} (unresolved_ratio_final={dag_check.get('unresolved_ratio_final')})\n")
+                f.write(f"  reason.not_acyclic:  {dag_check.get('not_acyclic')}\n")
+                if dag_check.get("cycle_example"):
+                    f.write(f"  cycle_example: {dag_check.get('cycle_example')}\n")
+            else:
+                f.write(f"  unresolved_ratio_final: {dag_check.get('unresolved_ratio_final')}\n")
     
     print(f"\nResults saved to: {output_dir}")
     
@@ -411,6 +580,10 @@ def train_complete(config: dict):
         'history': history,
         'fci_baseline_unresolved_ratio': fci_baseline_unresolved_ratio
     }
+    if dag_check is not None:
+        results["dag_check"] = dag_check
+    if dag_projection is not None:
+        results["dag_projection"] = dag_projection
     
     return results
 
