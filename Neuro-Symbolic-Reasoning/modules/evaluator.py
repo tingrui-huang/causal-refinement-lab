@@ -146,6 +146,7 @@ class CausalGraphEvaluator:
         """
         learned_edges = set()
         
+        thr = float(threshold) + 1e-6
         for var_a in self.var_structure['variable_names']:
             for var_b in self.var_structure['variable_names']:
                 if var_a == var_b:
@@ -162,7 +163,7 @@ class CausalGraphEvaluator:
                 block_strength = block.max().item()
                 
                 # If block strength exceeds threshold, add edge
-                if block_strength > threshold:
+                if block_strength > thr:
                     learned_edges.add((var_a, var_b))
         
         return learned_edges

@@ -13,6 +13,7 @@ Focus: Direction learning and sparsity tracking
 
 import torch
 import torch.optim as optim
+from torch.utils.data import DataLoader, TensorDataset
 from pathlib import Path
 import json
 import numpy as np
@@ -119,10 +120,17 @@ def train_complete(config: dict):
     
     # === 4. INITIALIZE LOSS COMPUTER ===
     print("\n[4/6] Initializing Loss Computer...")
+    # Variable groups for per-variable softmax CE reconstruction (paper-style option).
+    variable_groups = None
+    if str(config.get("reconstruction_mode", "bce")) == "group_ce":
+        variable_groups = [list(var_structure["var_to_states"][v]) for v in var_structure.get("variable_names", [])]
+
     loss_computer = LossComputer(
         block_structure=priors['blocks'],
         penalty_weights=priors['penalty_weights'],
-        skeleton_mask=priors['skeleton_mask']  # Add skeleton mask for preservation loss
+        skeleton_mask=priors['skeleton_mask'],  # Add skeleton mask for preservation loss
+        reconstruction_mode=str(config.get("reconstruction_mode", "bce")),
+        variable_groups=variable_groups,
     )
     
     # === 5. SETUP TRAINING ===
@@ -235,25 +243,106 @@ def train_complete(config: dict):
         'active_connections': [],
         'active_blocks': []
     }
+
+    # Always record the initial (epoch 0) state so summary/reporting works even when
+    # n_epochs < monitor_interval.
+    try:
+        with torch.no_grad():
+            pred_mode = str(config.get("pred_mode", "propagate"))
+            predictions0 = model(
+                observations,
+                n_hops=config['n_hops'],
+                pred_mode=pred_mode,
+            )
+            adjacency0 = model.get_adjacency()
+            losses0 = loss_computer.compute_total_loss(
+                predictions=predictions0,
+                targets=observations,
+                adjacency=adjacency0,
+                lambda_group=config['lambda_group'],
+                lambda_cycle=config['lambda_cycle'],
+                lambda_skeleton=config.get('lambda_skeleton', 0.1),
+            )
+        history['epoch'].append(0)
+        history['loss_total'].append(losses0['total'].item())
+        history['loss_reconstruction'].append(losses0['reconstruction'].item())
+        history['loss_group_lasso'].append(losses0['weighted_group_lasso'].item())
+        history['loss_cycle'].append(losses0['cycle_consistency'].item())
+        history['loss_skeleton'].append(losses0['skeleton_preservation'].item())
+        history['unresolved_ratio'].append(float(unresolved_stats_init.get('unresolved_ratio', 0.0)))
+        history['overall_sparsity'].append(float(sparsity_stats_init.get('overall_sparsity', 0.0)))
+        history['block_sparsity'].append(float(sparsity_stats_init.get('block_sparsity', 0.0)))
+        history['active_connections'].append(int(sparsity_stats_init.get('active_connections', 0)))
+        history['active_blocks'].append(int(sparsity_stats_init.get('active_blocks', 0)))
+    except Exception as e:
+        print(f"[WARN] Failed to record initial history (epoch 0): {e}")
     
-    for epoch in range(config['n_epochs']):
-        # === FORWARD PASS ===
-        predictions = model(observations, n_hops=config['n_hops'])
-        adjacency = model.get_adjacency()
-        
-        # === COMPUTE LOSS ===
-        losses = loss_computer.compute_total_loss(
-            predictions=predictions,
-            targets=observations,
-            adjacency=adjacency,
-            lambda_group=config['lambda_group'],
-            lambda_cycle=config['lambda_cycle'],
-            lambda_skeleton=config.get('lambda_skeleton', 0.1)  # Default: 0.1
+    batch_size = config.get("batch_size")
+    if batch_size is not None:
+        batch_size = int(batch_size)
+        if batch_size <= 0:
+            batch_size = None
+
+    dataset = None
+    loader = None
+    if batch_size is not None and batch_size < int(observations.shape[0]):
+        dataset = TensorDataset(observations)
+        loader = DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=bool(config.get("shuffle", True)),
+            drop_last=False,
+            num_workers=0,  # Windows-friendly
+            pin_memory=False,
         )
-        
-        # === BACKWARD PASS ===
+        print(f"[INFO] Mini-batch training enabled: batch_size={batch_size} | batches/epoch={len(loader)}")
+    else:
+        print(f"[INFO] Full-batch training (single batch) | N={int(observations.shape[0])}")
+
+    losses = None
+    pred_mode_cfg = str(config.get("pred_mode", "propagate"))
+    for epoch in range(config['n_epochs']):
         optimizer.zero_grad()
-        losses['total'].backward()
+        if loader is None:
+            # === FORWARD PASS ===
+            predictions = model(
+                observations,
+                n_hops=config['n_hops'],
+                pred_mode=pred_mode_cfg,
+            )
+            adjacency = model.get_adjacency()
+            losses = loss_computer.compute_total_loss(
+                predictions=predictions,
+                targets=observations,
+                adjacency=adjacency,
+                lambda_group=config['lambda_group'],
+                lambda_cycle=config['lambda_cycle'],
+                lambda_skeleton=config.get('lambda_skeleton', 0.1)
+            )
+            losses['total'].backward()
+        else:
+            # Mini-batch: step once per epoch via gradient accumulation to keep objective scaling stable.
+            # Structural losses depend only on adjacency, so we backprop them once per epoch.
+            adjacency = model.get_adjacency()
+            loss_group = loss_computer.weighted_group_lasso_loss(adjacency)
+            loss_cycle = loss_computer.cycle_consistency_loss(adjacency)
+            loss_skeleton = loss_computer.skeleton_preservation_loss(adjacency)
+            struct_total = (
+                config['lambda_group'] * loss_group
+                + config['lambda_cycle'] * loss_cycle
+                + config.get('lambda_skeleton', 0.1) * loss_skeleton
+            )
+            struct_total.backward()
+
+            # Recon gradients: average over all samples (micro-batch accumulation)
+            n_total = float(observations.shape[0])
+            for (xb,) in loader:
+                pred_b = model(xb, n_hops=config['n_hops'], pred_mode=pred_mode_cfg)
+                recon_b = loss_computer.reconstruction_loss(pred_b, xb)
+                (recon_b * (xb.shape[0] / n_total)).backward()
+            # For logging, compute a representative losses dict on full data every monitor interval below.
+            losses = None
+
         optimizer.step()
         
         # Clamp weights
@@ -263,19 +352,32 @@ def train_complete(config: dict):
         # === MONITORING METRICS ===
         if (epoch + 1) % config['monitor_interval'] == 0:
             with torch.no_grad():
+                # Recompute predictions/losses for reporting (avoid relying on per-batch partials).
+                pred_rep = model(observations, n_hops=config['n_hops'], pred_mode=pred_mode_cfg)
+                adjacency_rep = model.get_adjacency()
                 # Unresolved ratio
                 unresolved_stats = compute_unresolved_ratio(
-                    adjacency, 
+                    adjacency_rep, 
                     priors['blocks'],
                     threshold=config['edge_threshold']
                 )
                 
                 # Sparsity metrics
                 sparsity_stats = compute_sparsity_metrics(
-                    adjacency,
+                    adjacency_rep,
                     priors['skeleton_mask'],
                     priors['blocks'],
                     threshold=config['edge_threshold']
+                )
+
+                # Losses for reporting
+                losses = loss_computer.compute_total_loss(
+                    predictions=pred_rep,
+                    targets=observations,
+                    adjacency=adjacency_rep,
+                    lambda_group=config['lambda_group'],
+                    lambda_cycle=config['lambda_cycle'],
+                    lambda_skeleton=config.get('lambda_skeleton', 0.1),
                 )
                 
                 # Record history
@@ -309,6 +411,29 @@ def train_complete(config: dict):
                       f"({sparsity_stats['active_connections']}/{sparsity_stats['total_allowed']})")
                 print(f"    Block-level:  {sparsity_stats['block_sparsity']*100:5.1f}% "
                       f"({sparsity_stats['active_blocks']}/{sparsity_stats['total_blocks']})")
+
+    # Ensure final epoch is recorded even if monitor_interval doesn't divide n_epochs.
+    if history.get('epoch') and history['epoch'][-1] != int(config['n_epochs']):
+        try:
+            with torch.no_grad():
+                adjacency_f = model.get_adjacency()
+                unresolved_f = compute_unresolved_ratio(adjacency_f, priors['blocks'], threshold=config['edge_threshold'])
+                sparsity_f = compute_sparsity_metrics(adjacency_f, priors['skeleton_mask'], priors['blocks'], threshold=config['edge_threshold'])
+            # losses holds the last epoch's losses
+            if losses is not None:
+                history['epoch'].append(int(config['n_epochs']))
+                history['loss_total'].append(losses['total'].item())
+                history['loss_reconstruction'].append(losses['reconstruction'].item())
+                history['loss_group_lasso'].append(losses['weighted_group_lasso'].item())
+                history['loss_cycle'].append(losses['cycle_consistency'].item())
+                history['loss_skeleton'].append(losses['skeleton_preservation'].item())
+                history['unresolved_ratio'].append(float(unresolved_f.get('unresolved_ratio', 0.0)))
+                history['overall_sparsity'].append(float(sparsity_f.get('overall_sparsity', 0.0)))
+                history['block_sparsity'].append(float(sparsity_f.get('block_sparsity', 0.0)))
+                history['active_connections'].append(int(sparsity_f.get('active_connections', 0)))
+                history['active_blocks'].append(int(sparsity_f.get('active_blocks', 0)))
+        except Exception as e:
+            print(f"[WARN] Failed to record final history: {e}")
     
     # Calculate training time
     training_time = time.time() - start_time

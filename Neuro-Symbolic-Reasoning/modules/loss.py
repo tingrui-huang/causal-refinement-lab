@@ -29,7 +29,8 @@ Critical Implementation Notes:
 
 import torch
 import torch.nn as nn
-from typing import Dict, List, Tuple
+import torch.nn.functional as F
+from typing import Dict, List, Optional, Tuple
 
 
 class LossComputer:
@@ -40,8 +41,15 @@ class LossComputer:
     enforce causal structure learning.
     """
     
-    def __init__(self, block_structure: List[Dict], penalty_weights: torch.Tensor, 
-                 skeleton_mask: torch.Tensor = None):
+    def __init__(
+        self,
+        block_structure: List[Dict],
+        penalty_weights: torch.Tensor,
+        skeleton_mask: torch.Tensor = None,
+        *,
+        reconstruction_mode: str = "bce",
+        variable_groups: Optional[List[List[int]]] = None,
+    ):
         """
         Initialize loss computer with prior knowledge
         
@@ -57,6 +65,9 @@ class LossComputer:
         """
         self.block_structure = block_structure
         self.penalty_weights = penalty_weights
+        self.reconstruction_mode = str(reconstruction_mode)
+        self.variable_groups: Optional[List[List[int]]] = variable_groups
+        self._state_to_var: Optional[torch.Tensor] = None  # (n_states,) long, maps state index -> variable index
         
         # Store skeleton mask for skeleton preservation loss
         self.skeleton_mask = skeleton_mask
@@ -91,6 +102,21 @@ class LossComputer:
         print(f"Others (1.0): {(penalty_weights == 1.0).sum().item()} connections")
         if skeleton_mask is not None:
             print(f"Skeleton mask provided: {int(skeleton_mask.sum().item())} edges to preserve")
+        print(f"Reconstruction mode: {self.reconstruction_mode}")
+        if self.reconstruction_mode == "group_ce":
+            n_groups = len(self.variable_groups or [])
+            print(f"  Variable groups: {n_groups} (for per-variable softmax CE)")
+            if not self.variable_groups:
+                raise ValueError("variable_groups must be provided when reconstruction_mode='group_ce'")
+            # Build a dense state->variable index mapping once (used for fast vectorized group logsumexp).
+            state_to_var = torch.full((self.n_states,), -1, dtype=torch.long)
+            for var_idx, idxs in enumerate(self.variable_groups):
+                for s in idxs:
+                    state_to_var[int(s)] = int(var_idx)
+            if (state_to_var < 0).any():
+                missing = int((state_to_var < 0).sum().item())
+                raise ValueError(f"Invalid variable_groups: {missing} / {self.n_states} states are not assigned to any variable group")
+            self._state_to_var = state_to_var
         print(f"[INFO] Loss normalization enabled:")
         print(f"  - Group Lasso: normalized by {len(block_structure)} blocks")
         print(f"  - Cycle Loss: normalized by number of pairs")
@@ -111,7 +137,45 @@ class LossComputer:
         Returns:
             Scalar loss value
         """
-        return self.bce_loss(predictions, targets)
+        if self.reconstruction_mode == "bce":
+            # BCE over the full state vector (multi-hot reconstruction)
+            return self.bce_loss(predictions, targets)
+        if self.reconstruction_mode == "group_ce":
+            # Per-variable softmax cross-entropy, fully vectorized.
+            # predictions: (batch, n_states) logits
+            # targets: (batch, n_states) multi-one-hot (one active state per variable)
+            # For each sample b and variable v:
+            #   CE(b,v) = -log softmax(logits_{b, S_v})[y_{b,v}]
+            #          = logsumexp(logits_{b,S_v}) - logits_{b, y_{b,v}}
+            if self._state_to_var is None:
+                raise ValueError("Internal error: _state_to_var not initialized for group_ce")
+
+            device = predictions.device
+            state_to_var = self._state_to_var.to(device=device, non_blocking=True)  # (n_states,)
+            n_vars = int(state_to_var.max().item()) + 1
+            batch = predictions.shape[0]
+
+            # Index matrix mapping each (b, state) -> var id
+            idx = state_to_var.view(1, -1).expand(batch, -1)  # (batch, n_states)
+
+            # Compute per-(b,var) logsumexp over that var's states using scatter_reduce(max) + scatter_add(exp(shifted)).
+            max_per = torch.full((batch, n_vars), -float("inf"), device=device, dtype=predictions.dtype)
+            max_per.scatter_reduce_(1, idx, predictions, reduce="amax", include_self=True)
+            max_gather = max_per.gather(1, idx)  # (batch, n_states)
+            shifted = predictions - max_gather
+            denom = torch.zeros((batch, n_vars), device=device, dtype=predictions.dtype)
+            denom.scatter_add_(1, idx, torch.exp(shifted))
+            log_denom = torch.log(denom) + max_per  # (batch, n_vars)
+
+            # Numerator: logits at the true class per variable.
+            # Since targets is one-hot within each variable group, summing targets*logits grouped by var gives that logit.
+            num = torch.zeros((batch, n_vars), device=device, dtype=predictions.dtype)
+            num.scatter_add_(1, idx, targets * predictions)
+
+            # Average CE over variables and batch
+            loss = (log_denom - num).mean()
+            return loss
+        raise ValueError(f"Unsupported reconstruction_mode: {self.reconstruction_mode}")
     
     def weighted_group_lasso_loss(self, adjacency: torch.Tensor) -> torch.Tensor:
         """
