@@ -704,7 +704,7 @@ def main():
     # 'both'   - 运行 LLM 和 Random 两个实验（完整对比）
     # 'llm'    - 只运行 LLM Prior 实验
     # 'random' - 只运行 Random Prior 实验
-    run_mode = ('random')  # ← 改这里！(or use CLI: --run_mode ...)
+    run_mode = 'llm'  # ← 改这里！(or use CLI: --run_mode ...)
 
     # Random seeds: can be a single int or a list of ints
     # Example:
@@ -717,27 +717,42 @@ def main():
     low_confidence = 0.1   # 弱方向的权重（0.0-0.5）
     
     # 训练轮数
-    n_epochs = 140  # Optional postprocess
+    n_epochs = 140  # ← 改这里！(推荐: sachs=300, alarm=1000, andes=1500, hailfinder=1000)
+    
+    # 重建损失模式 (Reconstruction Loss Mode)
+    # "bce"      - Binary Cross-Entropy (当前代码实现，使用sigmoid)
+    # "group_ce" - Group Cross-Entropy (论文方法，使用per-variable softmax)
+    reconstruction_mode = "group_ce"  # ← 改这里！方便切换sigmoid/softmax
+    
+    # Lambda正则化系数覆盖 (Override默认值，不设置则使用数据集默认值)
+    # 注意：不同数据集有不同的默认lambda值（见代码第222-253行）
+    # 例如 andes 默认: lambda_cycle=0.005, lambda_group=0.01
+    lambda_group_override = None      # 组Lasso系数 (例如: 0.01)
+    lambda_cycle_override = 5.0       # ← 改这里！循环一致性系数 (例如: 5.0会覆盖默认的0.005)
+    lambda_skeleton_override = None   # 骨架保持系数 (例如: 0.1)
+    
+    # Optional postprocess
     use_vstructure_postprocess = False
     vstructure_fci_csv_path = None
-    run_id = None
+    run_id = None  # ← 改这里！或设为None使用时间戳
+    
     # Training-time v-structure hard mask (in-skeleton).
     # True  = enforce inferred colliders directly in the skeleton mask during training.
     # False = do not enforce (baseline).
     vstructure_in_mask = True
+    
     # DAG check (post-training): saves complete_dag_check.json in each run dir.
     dag_check = True
+    
     # If cyclic, optionally project to DAG by cutting weakest edge(s) on cycles.
     dag_project_on_cycle = True
+    
     # Ablation: block-tied adjacency (removes state-level degrees of freedom while staying in one-hot space)
     tie_blocks = False
     tie_method = "mean"
-    reconstruction_mode = "bce"
-    lambda_group_override = None
-    lambda_cycle_override = None
-    lambda_skeleton_override = None
+    
+    # Mini-batch size (None = full-batch training)
     batch_size = None
-    # ← 改这里！(推荐: sachs=300, alarm=1000, andes=1500,hailfinder=1000 )
     # ============================================================================
 
     # Apply CLI overrides (if provided)
