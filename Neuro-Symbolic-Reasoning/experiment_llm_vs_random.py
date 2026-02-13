@@ -52,7 +52,13 @@ def run_experiment_for_dataset(dataset_name: str,
                                dag_check: bool = False,
                                dag_project_on_cycle: bool = False,
                                tie_blocks: bool = False,
-                               tie_method: str = "mean"):
+                               tie_method: str = "mean",
+                               reconstruction_mode: str = "bce",
+                               pred_mode: Optional[str] = None,
+                               lambda_group_override: Optional[float] = None,
+                               lambda_cycle_override: Optional[float] = None,
+                               lambda_skeleton_override: Optional[float] = None,
+                               batch_size: Optional[int] = None):
     """
     Run LLM vs Random experiment for a specific dataset
     
@@ -71,6 +77,12 @@ def run_experiment_for_dataset(dataset_name: str,
         dag_project_on_cycle: If True, when cyclic, cut weakest edge(s) on cycles until acyclic; saves complete_*_dag artifacts.
         tie_blocks: If True, tie all state-to-state weights within each variable-pair block (ablation: remove state-level DoF).
         tie_method: Aggregation method used to tie a block ("mean" or "max").
+        reconstruction_mode: Reconstruction loss mode ("bce" or "group_ce").
+        pred_mode: Optional model prediction mode override. If None, chosen based on reconstruction_mode.
+        lambda_group_override: Optional override for lambda_group (group lasso weight).
+        lambda_cycle_override: Optional override for lambda_cycle (cycle consistency weight).
+        lambda_skeleton_override: Optional override for lambda_skeleton (skeleton preservation weight).
+        batch_size: Optional mini-batch size. If None, uses full-batch training.
     """
     print("\n" + "=" * 80)
     print(f"EXPERIMENT: {dataset_name.upper()} DATASET")
@@ -241,6 +253,13 @@ def run_experiment_for_dataset(dataset_name: str,
         edge_threshold = 0.1
 
     # Shared configuration (without skeleton paths - will be set per experiment)
+    # Choose prediction mode automatically unless overridden.
+    if pred_mode is None:
+        if str(reconstruction_mode) == "group_ce":
+            pred_mode = "paper_logits"
+        else:
+            pred_mode = "propagate"
+
     base_config = {
         'data_path': str(dataset_config['data_path']),
         'metadata_path': str(dataset_config['metadata_path']),
@@ -251,6 +270,7 @@ def run_experiment_for_dataset(dataset_name: str,
         'n_hops': 1,
         'lambda_group': lambda_group,
         'lambda_cycle': lambda_cycle,
+        'lambda_skeleton': float(lambda_skeleton_override) if lambda_skeleton_override is not None else 0.1,
         'monitor_interval': 20,
         'edge_threshold': edge_threshold,
         'high_confidence': high_conf,  # Pass to prior builder
@@ -261,7 +281,18 @@ def run_experiment_for_dataset(dataset_name: str,
         # Ablation knobs (passed through to CausalDiscoveryModel via train_complete)
         'tie_blocks': bool(tie_blocks),
         'tie_method': str(tie_method),
+        # Paper-vs-code reconstruction modes
+        'reconstruction_mode': str(reconstruction_mode),
+        'pred_mode': str(pred_mode),
+        # Mini-batch
+        'batch_size': int(batch_size) if batch_size is not None else None,
     }
+
+    # Optional lambda overrides (for quick ablations)
+    if lambda_group_override is not None:
+        base_config['lambda_group'] = float(lambda_group_override)
+    if lambda_cycle_override is not None:
+        base_config['lambda_cycle'] = float(lambda_cycle_override)
 
     # ============================================================================
     # Run experiments based on run_mode
@@ -602,6 +633,21 @@ def main():
         choices=["mean", "max"],
         help="Block tying aggregation method: mean | max. If omitted, uses the defaults below.",
     )
+    ap.add_argument(
+        "--reconstruction_mode",
+        type=str,
+        default=None,
+        choices=["bce", "group_ce"],
+        help="Reconstruction loss mode: bce (current code) | group_ce (paper-style per-variable softmax CE).",
+    )
+    ap.add_argument("--lambda_group", type=float, default=None,
+                    help="Override: lambda_group (weighted group lasso coefficient).")
+    ap.add_argument("--lambda_cycle", type=float, default=None,
+                    help="Override: lambda_cycle (cycle consistency coefficient).")
+    ap.add_argument("--lambda_skeleton", type=float, default=None,
+                    help="Override: lambda_skeleton (skeleton preservation coefficient).")
+    ap.add_argument("--batch_size", type=int, default=None,
+                    help="Mini-batch size. If omitted, uses full-batch training.")
     vmask_group = ap.add_mutually_exclusive_group()
     vmask_group.add_argument(
         "--vstructure_in_mask",
@@ -658,7 +704,7 @@ def main():
     # 'both'   - 运行 LLM 和 Random 两个实验（完整对比）
     # 'llm'    - 只运行 LLM Prior 实验
     # 'random' - 只运行 Random Prior 实验
-    run_mode = ('random')  # ← 改这里！(or use CLI: --run_mode ...)
+    run_mode = 'llm'  # ← 改这里！(or use CLI: --run_mode ...)
 
     # Random seeds: can be a single int or a list of ints
     # Example:
@@ -671,22 +717,42 @@ def main():
     low_confidence = 0.1   # 弱方向的权重（0.0-0.5）
     
     # 训练轮数
-    n_epochs = 140  # Optional postprocess
+    n_epochs = 140  # ← 改这里！(推荐: sachs=300, alarm=1000, andes=1500, hailfinder=1000)
+    
+    # 重建损失模式 (Reconstruction Loss Mode)
+    # "bce"      - Binary Cross-Entropy (当前代码实现，使用sigmoid)
+    # "group_ce" - Group Cross-Entropy (论文方法，使用per-variable softmax)
+    reconstruction_mode = "group_ce"  # ← 改这里！方便切换sigmoid/softmax
+    
+    # Lambda正则化系数覆盖 (Override默认值，不设置则使用数据集默认值)
+    # 注意：不同数据集有不同的默认lambda值（见代码第222-253行）
+    # 例如 andes 默认: lambda_cycle=0.005, lambda_group=0.01
+    lambda_group_override = None      # 组Lasso系数 (例如: 0.01)
+    lambda_cycle_override = 5.0       # ← 改这里！循环一致性系数 (例如: 5.0会覆盖默认的0.005)
+    lambda_skeleton_override = None   # 骨架保持系数 (例如: 0.1)
+    
+    # Optional postprocess
     use_vstructure_postprocess = False
     vstructure_fci_csv_path = None
-    run_id = None
+    run_id = None  # ← 改这里！或设为None使用时间戳
+    
     # Training-time v-structure hard mask (in-skeleton).
     # True  = enforce inferred colliders directly in the skeleton mask during training.
     # False = do not enforce (baseline).
     vstructure_in_mask = True
+    
     # DAG check (post-training): saves complete_dag_check.json in each run dir.
     dag_check = True
+    
     # If cyclic, optionally project to DAG by cutting weakest edge(s) on cycles.
     dag_project_on_cycle = True
+    
     # Ablation: block-tied adjacency (removes state-level degrees of freedom while staying in one-hot space)
     tie_blocks = False
     tie_method = "mean"
-    # ← 改这里！(推荐: sachs=300, alarm=1000, andes=1500,hailfinder=1000 )
+    
+    # Mini-batch size (None = full-batch training)
+    batch_size = None
     # ============================================================================
 
     # Apply CLI overrides (if provided)
@@ -714,6 +780,16 @@ def main():
         tie_blocks = False
     if args.tie_method is not None:
         tie_method = str(args.tie_method)
+    if args.reconstruction_mode is not None:
+        reconstruction_mode = str(args.reconstruction_mode)
+    if args.lambda_group is not None:
+        lambda_group_override = float(args.lambda_group)
+    if args.lambda_cycle is not None:
+        lambda_cycle_override = float(args.lambda_cycle)
+    if args.lambda_skeleton is not None:
+        lambda_skeleton_override = float(args.lambda_skeleton)
+    if args.batch_size is not None:
+        batch_size = int(args.batch_size)
     # CLI override (optional): otherwise keep the default configured above.
     if args.vstructure_in_mask:
         vstructure_in_mask = True
@@ -757,6 +833,11 @@ def main():
                     dag_project_on_cycle=dag_project_on_cycle,
                     tie_blocks=tie_blocks,
                     tie_method=tie_method,
+                    reconstruction_mode=reconstruction_mode,
+                    lambda_group_override=lambda_group_override,
+                    lambda_cycle_override=lambda_cycle_override,
+                    lambda_skeleton_override=lambda_skeleton_override,
+                    batch_size=batch_size,
                 )
                 if result:
                     all_results[dataset_name][int(seed)] = result

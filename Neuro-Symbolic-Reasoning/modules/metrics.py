@@ -110,8 +110,11 @@ def compute_unresolved_ratio(adjacency: torch.Tensor,
                 backward_strength = 0.0
         
         # Classify
-        forward_strong = forward_strength > threshold
-        backward_strong = backward_strength > threshold
+        # NOTE: Use a small epsilon to avoid float32 edge cases where e.g. 0.1 is stored as 0.10000000149
+        # and accidentally counted as ">" 0.1.
+        thr = float(threshold) + 1e-6
+        forward_strong = forward_strength > thr
+        backward_strong = backward_strength > thr
         
         if forward_strong and backward_strong:
             unresolved_count += 1  # Symmetric/unresolved
@@ -166,14 +169,15 @@ def compute_sparsity_metrics(adjacency: torch.Tensor,
     # Overall sparsity
     total_allowed = int(skeleton_mask.sum().item())
     adjacency_np = adjacency.detach().cpu().numpy()
-    active_connections = (adjacency_np > threshold).sum()
+    thr = float(threshold) + 1e-6
+    active_connections = (adjacency_np > thr).sum()
     overall_sparsity = (total_allowed - active_connections) / total_allowed
     
     # Block-level sparsity
     active_blocks = 0
     for block in block_structure:
         block_weights = adjacency[block['row_indices']][:, block['col_indices']]
-        if block_weights.max().item() > threshold:
+        if block_weights.max().item() > thr:
             active_blocks += 1
     
     block_sparsity = (len(block_structure) - active_blocks) / len(block_structure)

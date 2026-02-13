@@ -128,7 +128,13 @@ class CausalDiscoveryModel(nn.Module):
 
         return adjacency
     
-    def forward(self, observations: torch.Tensor, n_hops: int = 1) -> torch.Tensor:
+    def forward(
+        self,
+        observations: torch.Tensor,
+        n_hops: int = 1,
+        *,
+        pred_mode: str = "propagate",
+    ) -> torch.Tensor:
         """
         Multi-hop causal reasoning
         
@@ -145,24 +151,36 @@ class CausalDiscoveryModel(nn.Module):
             2. Preserve initial observations: next = max(next, observations)
             3. Clamp to [0, 1]
         """
+        pred_mode = str(pred_mode)
+
         adjacency = self.get_adjacency()
-        
-        current = observations
-        
-        for hop in range(n_hops):
-            # Single hop reasoning: matrix multiplication
-            next_state = torch.matmul(current, adjacency)
-            
-            # Residual connection: preserve initial observations
-            # This is critical to prevent observed facts from disappearing
-            next_state = torch.max(next_state, observations)
-            
-            # Clamp to valid probability range
-            next_state = torch.clamp(next_state, 0.0, 1.0)
-            
-            current = next_state
-        
-        return current
+
+        if pred_mode == "propagate":
+            current = observations
+            for _ in range(int(n_hops)):
+                # Single hop reasoning: matrix multiplication
+                next_state = torch.matmul(current, adjacency)
+
+                # Residual connection: preserve initial observations
+                # This is critical to prevent observed facts from disappearing
+                next_state = torch.max(next_state, observations)
+
+                # Clamp to valid probability range
+                next_state = torch.clamp(next_state, 0.0, 1.0)
+
+                current = next_state
+            return current
+
+        if pred_mode == "paper_logits":
+            # Paper-style: return logits for per-variable softmax CE reconstruction.
+            # We intentionally do NOT apply max-residual or clamp here, as softmax CE expects logits.
+            # Use a single step by default; repeated hops tend to explode logits and is not used in the paper mode.
+            # IMPORTANT: In paper mode, logits should be computed from the *free* parameter matrix W (logits space),
+            # not from the sigmoid-activated adjacency. This matches the paper form Softmax(x W) with a hard mask.
+            W_masked = self.raw_adj * self.skeleton_mask
+            return torch.matmul(observations, W_masked)
+
+        raise ValueError(f"Unsupported pred_mode: {pred_mode}")
     
     def get_block_weights(self, row_indices: list, col_indices: list) -> torch.Tensor:
         """
@@ -202,6 +220,7 @@ class CausalDiscoveryModel(nn.Module):
         adjacency = self.get_adjacency()
         edges = set()
         
+        thr = float(threshold) + 1e-6
         for var_a in var_structure['variable_names']:
             for var_b in var_structure['variable_names']:
                 if var_a == var_b:
@@ -218,7 +237,7 @@ class CausalDiscoveryModel(nn.Module):
                 block_strength = block.max().item()
                 
                 # If block strength exceeds threshold, add edge
-                if block_strength > threshold:
+                if block_strength > thr:
                     edges.add((var_a, var_b))
         
         return edges
