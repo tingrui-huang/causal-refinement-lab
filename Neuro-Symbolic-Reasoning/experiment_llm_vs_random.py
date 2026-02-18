@@ -698,13 +698,13 @@ def main():
     #   datasets = ['alarm', 'sachs', 'andes']  # 跑三个
     #
     # 可选数据集：'alarm', 'sachs', 'andes', 'child', 'hailfinder', 'insurance', 'win95pts'
-    datasets = ['insurance']  # ← 改这里！(or use CLI: --datasets ...)
+    datasets = ['andes']  # ← 改这里！(or use CLI: --datasets ...)
     
     # 选择要运行的实验类型
     # 'both'   - 运行 LLM 和 Random 两个实验（完整对比）
     # 'llm'    - 只运行 LLM Prior 实验
     # 'random' - 只运行 Random Prior 实验
-    run_mode = 'llm'  # ← 改这里！(or use CLI: --run_mode ...)
+    run_mode = 'random'  # ← 改这里！(or use CLI: --run_mode ...)
 
     # Random seeds: can be a single int or a list of ints
     # Example:
@@ -717,7 +717,7 @@ def main():
     low_confidence = 0.1   # 弱方向的权重（0.0-0.5）
     
     # 训练轮数
-    n_epochs = 140  # ← 改这里！(推荐: sachs=300, alarm=1000, andes=1500, hailfinder=1000)
+    n_epochs = 80  # ← 改这里！(推荐: sachs=300, alarm=1000, andes=1500, hailfinder=1000)
     
     # 重建损失模式 (Reconstruction Loss Mode)
     # "bce"      - Binary Cross-Entropy (当前代码实现，使用sigmoid)

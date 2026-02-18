@@ -70,7 +70,7 @@ class CausalDiscoveryModel(nn.Module):
         if self.tie_blocks:
             print(f"[ABLATION] Block-tied adjacency enabled (tie_method={self.tie_method}, blocks={len(self.blocks)})")
     
-    def _apply_block_tying(self, adjacency: torch.Tensor) -> torch.Tensor:
+    def _apply_block_tying(self, matrix: torch.Tensor) -> torch.Tensor:
         """
         Ablation: tie all state-to-state weights within each variable-pair block.
 
@@ -78,16 +78,16 @@ class CausalDiscoveryModel(nn.Module):
         Only allowed entries (per skeleton_mask) are tied; forbidden entries remain 0.
         """
         if (not self.tie_blocks) or (not self.blocks):
-            return adjacency
+            return matrix
 
         # Work on a copy to keep autograd behavior clean & avoid in-place on views.
-        adj = adjacency.clone()
+        out = matrix.clone()
 
         for b in self.blocks:
-            row_idx = torch.as_tensor(b["row_indices"], device=adj.device, dtype=torch.long)
-            col_idx = torch.as_tensor(b["col_indices"], device=adj.device, dtype=torch.long)
+            row_idx = torch.as_tensor(b["row_indices"], device=out.device, dtype=torch.long)
+            col_idx = torch.as_tensor(b["col_indices"], device=out.device, dtype=torch.long)
 
-            block = adj[row_idx[:, None], col_idx[None, :]]
+            block = out[row_idx[:, None], col_idx[None, :]]
             mask = self.skeleton_mask[row_idx[:, None], col_idx[None, :]]
 
             denom = mask.sum()
@@ -102,9 +102,9 @@ class CausalDiscoveryModel(nn.Module):
             else:
                 raise ValueError(f"Unknown tie_method: {self.tie_method}")
 
-            adj[row_idx[:, None], col_idx[None, :]] = v * mask
+            out[row_idx[:, None], col_idx[None, :]] = v * mask
 
-        return adj
+        return out
 
     def get_adjacency(self) -> torch.Tensor:
         """
@@ -178,6 +178,9 @@ class CausalDiscoveryModel(nn.Module):
             # IMPORTANT: In paper mode, logits should be computed from the *free* parameter matrix W (logits space),
             # not from the sigmoid-activated adjacency. This matches the paper form Softmax(x W) with a hard mask.
             W_masked = self.raw_adj * self.skeleton_mask
+            # Keep ablation behavior consistent across pred modes:
+            # when tie_blocks=True, tie logits blocks as well so reconstruction also loses state-level DoF.
+            W_masked = self._apply_block_tying(W_masked)
             return torch.matmul(observations, W_masked)
 
         raise ValueError(f"Unsupported pred_mode: {pred_mode}")
