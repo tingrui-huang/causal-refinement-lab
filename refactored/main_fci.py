@@ -4,6 +4,7 @@ Main Program: FCI
 
 import sys
 import os
+import time
 from datetime import datetime
 
 # Import config and utils
@@ -41,6 +42,7 @@ class FCIPipeline:
 
         self.model_name = "fci"
         self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.algorithm_runtime_seconds = None
         
         print("\n" + "=" * 60)
         print("Pipeline initialized successfully!")
@@ -53,14 +55,17 @@ class FCIPipeline:
         print(f"Significance level: {alpha}")
         print(f"{'='*60}\n")
 
+        algo_start = time.perf_counter()
         self.graph = self.algorithm.run(
             independence_test=independence_test,
             alpha=alpha
         )
+        self.algorithm_runtime_seconds = time.perf_counter() - algo_start
         
         print(f"\n{'='*60}")
         print("FCI Algorithm Completed")
         print(f"{'='*60}")
+        print(f"[TIME] FCI algorithm runtime: {self.algorithm_runtime_seconds:.2f}s")
         self._print_statistics()
         self._save_results()
     
@@ -118,6 +123,9 @@ def main():
     """Main function - runs FCI with parameters from config.py"""
     from config import FCI_INDEPENDENCE_TEST, FCI_ALPHA, GROUND_TRUTH_PATH
     
+    total_start = time.perf_counter()
+    evaluation_runtime_seconds = None
+
     print_dataset_info()
     
     # Use parameters from config.py (non-interactive mode)
@@ -146,6 +154,7 @@ def main():
     print("=" * 60)
     
     try:
+        eval_start = time.perf_counter()
         from evaluate_fci import evaluate_fci, find_latest_fci_csv
         from pathlib import Path
         
@@ -173,14 +182,21 @@ def main():
         elif not gt_path.exists():
             print(f"[WARN] Ground truth file not found: {gt_path}")
             print("Update GROUND_TRUTH_PATH in config.py to enable evaluation")
+        evaluation_runtime_seconds = time.perf_counter() - eval_start
     except Exception as e:
         import traceback
         print(f"[ERROR] Evaluation failed: {e}")
         traceback.print_exc()
         print("\nYou can run 'python evaluate_fci.py' manually later.")
+        evaluation_runtime_seconds = time.perf_counter() - eval_start
     
     print("\n" + "=" * 60)
     print("All done!")
+    total_runtime_seconds = time.perf_counter() - total_start
+    print(f"[TIME] Algorithm runtime:  {pipeline.algorithm_runtime_seconds:.2f}s")
+    if evaluation_runtime_seconds is not None:
+        print(f"[TIME] Evaluation runtime: {evaluation_runtime_seconds:.2f}s")
+    print(f"[TIME] Total runtime:      {total_runtime_seconds:.2f}s")
     print("=" * 60 + "\n")
 
 
