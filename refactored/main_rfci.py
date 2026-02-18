@@ -6,6 +6,7 @@ to refactored/output/<dataset>/, compatible with the rest of the pipeline.
 """
 
 import os
+import time
 from datetime import datetime
 
 from config import get_output_dir
@@ -41,6 +42,7 @@ class RFCIPipeline:
 
         self.model_name = "rfci"
         self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.algorithm_runtime_seconds = None
 
         print("\n" + "=" * 60)
         print("Pipeline initialized successfully!")
@@ -55,6 +57,7 @@ class RFCIPipeline:
         print(f"{'='*60}\n")
 
         edges_out = os.path.join(self.output_dir, f"edges_RFCI_{self.timestamp}.csv")
+        algo_start = time.perf_counter()
         self.graph = self.algorithm.run(
             alpha=alpha,
             depth=depth,
@@ -63,10 +66,12 @@ class RFCIPipeline:
             verbose=verbose,
             output_edges_path=edges_out,
         )
+        self.algorithm_runtime_seconds = time.perf_counter() - algo_start
 
         print(f"\n{'='*60}")
         print("RFCI Algorithm Completed")
         print(f"{'='*60}")
+        print(f"[TIME] RFCI algorithm runtime: {self.algorithm_runtime_seconds:.2f}s")
         self._print_statistics()
         self._save_results()
 
@@ -122,6 +127,7 @@ def main():
     Main function - runs RFCI with parameters from config.py (if present),
     otherwise defaults are used.
     """
+    total_start = time.perf_counter()
     print_dataset_info()
 
     from config import RFCI_ALPHA, RFCI_DEPTH, RFCI_MAX_DISC_PATH_LEN, RFCI_MAX_ROWS, VERBOSE as CFG_VERBOSE
@@ -147,6 +153,9 @@ def main():
 
     print("\n" + "=" * 60)
     print(f"RFCI completed! Results saved to {get_output_dir()}/")
+    total_runtime_seconds = time.perf_counter() - total_start
+    print(f"[TIME] Algorithm runtime:  {pipeline.algorithm_runtime_seconds:.2f}s")
+    print(f"[TIME] Total runtime:      {total_runtime_seconds:.2f}s")
     print("=" * 60 + "\n")
 
 

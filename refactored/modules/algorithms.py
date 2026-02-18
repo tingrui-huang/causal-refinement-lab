@@ -10,6 +10,7 @@ import networkx as nx
 import os
 import csv
 import subprocess
+import warnings
 from pathlib import Path
 import re
 
@@ -30,19 +31,39 @@ class GESAlgorithm(BaseAlgorithm):
         super().__init__(dataframe, nodes)
         print("[ALGORITHM] GES (Greedy Equivalence Search)")
         print("[ALGORITHM] Assumes: No latent confounders")
-        print("[ALGORITHM] NOTE: Default BIC score assumes Gaussian data")
-        print("[ALGORITHM]       For discrete data, BDeu score is theoretically better")
-        print("[ALGORITHM]       But implementation is complex, so we use BIC for now")
+        print("[ALGORITHM] NOTE: Choose score function by data type")
+        print("[ALGORITHM]       - discrete:   local_score_BDeu")
+        print("[ALGORITHM]       - continuous: local_score_BIC")
     
     def run(self, score_func='local_score_BIC'):
         try:
             from causallearn.search.ScoreBased.GES import ges
-            
+
+            # Accept a few common aliases to reduce configuration mistakes.
+            score_aliases = {
+                "bic": "local_score_BIC",
+                "bdeu": "local_score_BDeu",
+            }
+            canonical = score_aliases.get(str(score_func).strip().lower(), score_func)
+
             print(f"[GES] Running with score function: {score_func}")
             print(f"[GES] Data shape: {self.data_matrix.shape}")
-            
-            # Run GES
-            record = ges(self.data_matrix, score_func=score_func)
+
+            # Suppress noisy pandas FutureWarning emitted inside causal-learn's
+            # LocalScoreFunction for groupby.apply behavior changes.
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message=r".*DataFrameGroupBy\.apply operated on the grouping columns.*",
+                    category=FutureWarning,
+                )
+                warnings.filterwarnings(
+                    "ignore",
+                    message=r".*When grouping with a length-1 list-like, you will need to pass a length-1 tuple to get_group.*",
+                    category=FutureWarning,
+                )
+                # Run GES
+                record = ges(self.data_matrix, score_func=canonical)
             
             # Extract graph
             learned_graph = record['G']
@@ -61,6 +82,8 @@ class GESAlgorithm(BaseAlgorithm):
             raise
         except Exception as e:
             print(f"[ERROR] GES failed: {e}")
+            print("[HINT] For discrete datasets, prefer score_func='local_score_BDeu'.")
+            print("[HINT] For continuous datasets, prefer score_func='local_score_BIC'.")
             raise
     
     def _convert_to_networkx(self, causallearn_graph):
