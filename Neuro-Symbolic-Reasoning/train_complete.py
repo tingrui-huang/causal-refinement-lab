@@ -34,7 +34,6 @@ from modules.dag_check import (
     project_to_dag_cut_weakest_in_cycle,
 )
 
-
 def train_complete(config: dict):
     """
     Complete training with full monitoring
