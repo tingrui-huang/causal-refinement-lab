@@ -24,7 +24,7 @@ NEURO_SYMBOLIC_DIR = PROJECT_ROOT / 'Neuro-Symbolic-Reasoning'
 # DATASET SELECTION
 # ============================================================================
 # Options: 'alarm', 'insurance', 'sachs', 'child', 'hailfinder', 'win95pts', 'tuebingen_pair0001', etc.
-DATASET = 'pigs'
+DATASET = 'alarm'
 
 # ============================================================================
 # STEP 1: FCI ALGORITHM SETTINGS
